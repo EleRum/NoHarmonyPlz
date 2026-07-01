@@ -7,14 +7,31 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body, #container { width: 100%; height: 100%; overflow: hidden; }
+  #container { background: #f0f2f5; }
 </style>
 </head>
 <body>
 <div id="container"></div>
 
-<!-- 高德 JSAPI v2.0 (WebGL) -->
-<script src="https://webapi.amap.com/v2/maps?v=2.0&key=__AMAP_KEY__&plugin=AMap.PlaceSearch,AMap.Geocoder,AMap.Geolocation"></script>
-
+<!-- 高德 JSAPI v2.0 (WebGL) — Key 已填入 -->
+<script src="https://webapi.amap.com/maps?v=2.0&key=bb0c1640992e6c7f2b1467498d8ae848&plugin=AMap.PlaceSearch,AMap.Geocoder,AMap.Geolocation"></script>
 <script src="jsapi-bridge.js"></script>
+<script>
+  // 高德 JSAPI 加载完成后自动初始化地图
+  function tryInitMap() {
+    if (typeof AMap !== 'undefined' && typeof FootMapBridge !== 'undefined') {
+      FootMapBridge.initMap({ lng: 116.3974, lat: 39.9042, zoom: 15 });
+      return true;
+    }
+    return false;
+  }
+  if (!tryInitMap()) {
+    var retries = 0;
+    var timer = setInterval(function() {
+      retries++;
+      if (tryInitMap() || retries > 30) { clearInterval(timer); }
+    }, 200);
+  }
+</script>
 </body>
 </html>

@@ -41,50 +41,26 @@ export class MapJsBridge implements IMapService {
    */
   setController(ctl: webview.WebviewController): void {
     this.controller = ctl;
-    // 注册 JS 回调代理
+    // 注册原生桥接对象 → JS 端通过 window.arkTsCallback.onMessage(msg) 调用
     ctl.registerJavaScriptProxy({
-      // JS 端调用 window.arkTsCallback(jsonStr) 时，此方法被触发
-      // 实际函数名由 Web 组件 onControllerAttached 或 javaScriptProxy 定义
-    }, 'arkTsCallback', ['arkTsCallback']);
+      onMessage: (message: string): void => {
+        this.handleJsMessage(message);
+      }
+    }, 'arkTsCallback', ['onMessage']);
   }
 
   initialize(config: MapInitConfig): void {
     this.apiKey = config.apiKey;
-
-    // 注入 API Key 到 HTML 中
+    // map.html 已自包含 AMap 加载和 initMap 调用，这里仅设置中心
     if (this.controller) {
-      // 为安全起见，通过 JS 设置 API Key 而不是直接注入到 HTML
-      const initJs = `
-        (function() {
-          // 替换占位符
-          var scripts = document.querySelectorAll('script[src*="__AMAP_KEY__"]');
-          for (var i = 0; i < scripts.length; i++) {
-            var oldSrc = scripts[i].src;
-            scripts[i].src = oldSrc.replace('__AMAP_KEY__', '${config.apiKey}');
-          }
-        })();
-      `;
-      try {
-        this.controller.runJavaScript(initJs);
-      } catch (e) {
-        Logger.warn(TAG, 'Failed to inject API key');
-      }
-
-      // 等待 JS 加载完成后初始化地图
       const js = `
-        if (typeof AMap !== 'undefined') {
+        if (FootMapBridge && FootMapBridge.isReady()) {
+          FootMapBridge.setCenter(${config.lng}, ${config.lat}, ${config.zoom});
+        } else if (FootMapBridge) {
           FootMapBridge.initMap(${JSON.stringify({ lng: config.lng, lat: config.lat, zoom: config.zoom })});
-        } else {
-          setTimeout(function() {
-            FootMapBridge.initMap(${JSON.stringify({ lng: config.lng, lat: config.lat, zoom: config.zoom })});
-          }, 500);
         }
       `;
-      try {
-        this.controller.runJavaScript(js);
-      } catch (e) {
-        Logger.warn(TAG, 'Failed to init map: %{public}s', JSON.stringify(e));
-      }
+      try { this.controller.runJavaScript(js); } catch (e) { /* noop */ }
     }
   }
 

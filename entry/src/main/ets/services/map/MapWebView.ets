@@ -12,7 +12,10 @@ export struct MapWebView {
   build() {
     Web({ src: $rawfile('map/map.html'), controller: this.controller })
       .javaScriptAccess(true)
-      .onControllerAttached(() => {
+      .domStorageAccess(true)
+      .width('100%')
+      .height('100%')
+      .onControllerAttached((): void => {
         if (this.onControllerAttached) {
           this.onControllerAttached(this.controller);
         }

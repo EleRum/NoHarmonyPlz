@@ -19,6 +19,7 @@ import { RecommendContent } from './RecommendPage';
 import { ReportContent } from './ReportPage';
 import { AgentScheduler } from '../services/AgentScheduler';
 import { RecommendationEngine } from '../services/RecommendationEngine';
+import { AmapSearchService } from '../services/map/AmapSearchService';
 import { Recommendation } from '../model/Recommendation';
 import { AiAgent, AgentReply } from '../services/AiAgent';
 import { IMapService, MapEventCallbacks } from '../services/map/IMapService';
@@ -329,6 +330,7 @@ export struct MapPage {
     const bridge: MapJsBridge = new MapJsBridge();
     bridge.setController(controller);
     this.mapService = bridge;
+    AmapSearchService.getInstance().setMapService(bridge);
 
     const callbacks: MapEventCallbacks = {
       onMapReady: (_err: Error | null): void => {
@@ -349,19 +351,17 @@ export struct MapPage {
     };
     bridge.setEventCallbacks(callbacks);
 
-    const amapKey: string = 'your-api-key'; // 替换为实际 API Key
     bridge.initialize({
       lng: this.mapCenter.longitude,
       lat: this.mapCenter.latitude,
       zoom: this.mapZoom,
-      apiKey: amapKey
+      apiKey: 'bb0c1640992e6c7f2b1467498d8ae848'
     } as MapInitConfig);
 
-    // 如果 JSAPI 未通过 onMapReady 回调触发，设置备用超时
     bridge.onMapReady((_err: Error | null): void => {
       if (!this.isMapReady) {
         this.isMapReady = true;
-        Logger.info(TAG, 'Map ready via fallback callback');
+        Logger.info(TAG, 'Map ready via fallback');
         this.setupGpsTracking();
         this.moveCamera();
         if (this.dayRoutes.length > 0) {

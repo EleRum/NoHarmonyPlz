@@ -28,8 +28,8 @@
   // ═══════════════════════════════════════════
   function sendToArkTS(data) {
     try {
-      if (window.arkTsCallback) {
-        window.arkTsCallback(JSON.stringify(data));
+      if (window.arkTsCallback && typeof window.arkTsCallback.onMessage === 'function') {
+        window.arkTsCallback.onMessage(JSON.stringify(data));
       }
     } catch (e) {
       console.error('FootMapBridge: sendToArkTS error', e);
