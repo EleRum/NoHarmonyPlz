@@ -1,0 +1,108 @@
+{
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "storeFile": "D:/file/code/harmony/key/new.p12",
+          "storePassword": "000000348ABA15C830C9A3CD411F6F04C816DC063E256A1012BEEA858BC1DCCBA8D5F9F08ADD5740B7E4ED008C558101109A55EB2335ECC91625EAB6F3747D945E1921C1",
+          "keyAlias": "new",
+          "keyPassword": "00000034B90B082949BF5657DCD600D9DBD1359033E1306F03876658F892C0BEB36FA1039CB620F0B9C0050AABD12469F2582E8439D14F0DDBF8957C702240439F3066E9",
+          "signAlg": "SHA256withECDSA",
+          "profile": "D:/file/code/harmony/key/newRelease.p7b",
+          "certpath": "D:/file/code/harmony/key/new.cer"
+        }
+      },
+      {
+        "name": "new",
+        "type": "HarmonyOS",
+        "material": {
+          "storeFile": "D:/file/code/harmony/key/new.p12",
+          "storePassword": "00000034358770CEAAAB7AFD1AD83BFA37E338398E6FB65D97BDF58D5D34822B98445F9DA4ED459F15AE9B6646018393DE44121E7727F8BDF977F1353D0CFEC25FC9D9CD",
+          "keyAlias": "new",
+          "keyPassword": "0000003433CEDA8A0E7389711608FDB90ECF6D78A47E2DCC6420BB24B540227C897D08FD49015DE6B398BBEABEAA77C62DB1DC2C08589F45C75903EA7847FECC68F3AE22",
+          "signAlg": "SHA256withECDSA",
+          "profile": "D:/file/code/harmony/key/newRelease.p7b",
+          "certpath": "D:/file/code/harmony/key/new.cer"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "new",
+        "targetSdkVersion": "5.0.0(12)",
+        "compatibleSdkVersion": "5.0.0(12)",
+        "runtimeOS": "HarmonyOS",
+        "arkTSVersion": "1.1",
+        "buildOption": {
+          "debuggable": false,
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      },
+      {
+        "name": "openHarmony",
+        "targetSdkVersion": "6.1.1(24)",
+        "compatibleSdkVersion": "6.1.1(24)",
+        "compileSdkVersion": "6.1.1(24)",
+        "runtimeOS": "OpenHarmony",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug"
+      },
+      {
+        "name": "release"
+      }
+    ],
+    "capabilities": [
+      {
+        "bundleName": "com.footprint.travelmap",
+        "config": [
+          {
+            "name": "webAccessServiceForAIQA",
+            "capability": "webAccessServiceForAIQA"
+          },
+          {
+            "name": "Push Kit",
+            "capability": "com.huawei.service.push.base_service"
+          },
+          {
+            "name": "Device status detection",
+            "capability": "com.huawei.service.device_security.device_verify"
+          },
+          {
+            "name": "Map Kit",
+            "capability": "com.huawei.service.mapkit"
+          }
+        ]
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default",
+            "openHarmony"
+          ]
+        }
+      ]
+    }
+  ]
+}

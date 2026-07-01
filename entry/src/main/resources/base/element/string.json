@@ -1,0 +1,44 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "足迹地图 — AI驱动的智慧出行助手"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "足迹地图主程序"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "足迹地图"
+    },
+    {
+      "name": "location_permission_reason",
+      "value": "用于记录您的出行轨迹和当前位置"
+    },
+    {
+      "name": "approximate_location_permission_reason",
+      "value": "用于识别您所在的大致区域"
+    },
+    {
+      "name": "background_location_permission_reason",
+      "value": "用于在后台持续记录足迹"
+    },
+    {
+      "name": "background_running_permission_reason",
+      "value": "用于后台持续采集位置信息"
+    },
+    {
+      "name": "read_media_permission_reason",
+      "value": "用于读取照片中的位置信息以丰富足迹"
+    },
+    {
+      "name": "media_location_permission_reason",
+      "value": "用于获取照片拍摄地点"
+    },
+    {
+      "name": "activity_motion_permission_reason",
+      "value": "用于识别您的出行方式"
+    }
+  ]
+}

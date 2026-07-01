@@ -1,0 +1,10 @@
+{
+  "modelVersion": "6.1.1",
+  "description": "足迹地图 - 用 AI Agent 取代大众点评，自动记录足迹、理解行为、主动推荐",
+  "dependencies": {},
+  "devDependencies": {
+    "@ohos/hypium": "1.0.25",
+    "@ohos/hamock": "1.0.0"
+  },
+  "dynamicDependencies": {}
+}

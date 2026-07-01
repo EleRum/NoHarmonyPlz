@@ -1,0 +1,12 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "足迹地图"
+    },
+    {
+      "name": "app_desc",
+      "value": "AI Agent 驱动的智慧出行助手"
+    }
+  ]
+}
