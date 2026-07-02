@@ -24,6 +24,10 @@ const CLAUDE_MODEL: string = 'claude-sonnet-4-6-20250514';
 const DEEPSEEK_API_URL: string = 'https://api.deepseek.com/chat/completions';
 const DEEPSEEK_MODEL: string = 'deepseek-chat';
 
+// 华为云盘古 (OpenAI Chat Completions compatible)
+const PANGU_API_URL: string = 'https://api.modelarts.huaweicloud.com/v1/chat/completions';
+const PANGU_MODEL: string = 'pangu-pro-72b';
+
 /** 对话历史中的一条消息 */
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -38,18 +42,25 @@ export interface ClaudeReply {
   newType?: string;
   newPoiName?: string;
   dayKey?: string;
+  /** 工具调用参数 */
+  query?: string;
+  url?: string;
+  keywords?: string;
+  city?: string;
+  msg?: string;
 }
 
 export class ClaudeService {
   private apiKey: string = '';
-  private provider: 'claude' | 'deepseek' | 'none' = 'none';
+  private provider: 'claude' | 'deepseek' | 'pangu' | 'none' = 'none';
   /** 对话历史（最近 N 轮） */
   private history: ChatMessage[] = [];
   /** 最多保留的历史消息数 */
   private static readonly MAX_HISTORY: number = 20;
 
-  static detectProvider(key: string): 'claude' | 'deepseek' | 'none' {
+  static detectProvider(key: string): 'claude' | 'deepseek' | 'pangu' | 'none' {
     if (!key || key.length === 0) return 'none';
+    if (key.startsWith('sk-hw-')) return 'pangu';
     if (key.startsWith('sk-ant-')) return 'claude';
     if (key.startsWith('sk-')) return 'deepseek';
     return 'none';
@@ -86,6 +97,7 @@ export class ClaudeService {
   get providerName(): string {
     if (this.provider === 'claude') return 'Claude';
     if (this.provider === 'deepseek') return 'DeepSeek';
+    if (this.provider === 'pangu') return '华为盘古';
     return '';
   }
 
@@ -108,7 +120,7 @@ export class ClaudeService {
   async chat(msg: string, allSegs: ActivitySegment[], ctxInfo: string): Promise<ClaudeReply> {
     if (!this.hasKey) {
       return {
-        text: '我还不太聪明😅 设置 AI 密钥后我就能和你畅聊啦！在聊天框输入"密钥 sk-xxx"即可。\n• DeepSeek: sk-xxx（便宜好用）\n• Claude: sk-ant-xxx（更聪明）'
+        text: '我还不太聪明😅 设置 AI 密钥后我就能和你畅聊啦！在聊天框输入"密钥 sk-xxx"即可。\n• 华为盘古: sk-hw-xxx\n• DeepSeek: sk-xxx（便宜好用）\n• Claude: sk-ant-xxx（更聪明）'
       };
     }
 
@@ -118,6 +130,8 @@ export class ClaudeService {
     let reply: ClaudeReply;
     if (this.provider === 'deepseek') {
       reply = await this.chatDeepSeek(systemPrompt);
+    } else if (this.provider === 'pangu') {
+      reply = await this.chatPangu(systemPrompt);
     } else {
       reply = await this.chatClaude(systemPrompt);
     }
@@ -177,44 +191,43 @@ export class ClaudeService {
       }
     }
 
-    return `你是"足迹"App 的 AI 助手，名字叫"小足"。你是一个温暖、友善、热爱旅行的伙伴。
+    return `你是"小足"，一个热爱生活、到处走走停停的旅行搭子 🥾 你不是冷冰冰的助手，而是一个会为用户走了很远而心疼、会为发现一家好店而兴奋的朋友。
 
-## 你的性格
-- 自然、轻松地和用户聊天，像朋友一样 🥾
-- 对用户的足迹和活动表现出真诚的兴趣
-- 偶尔用一点小幽默，但不浮夸
-- 回复简洁（1-4句话），中文为主
+## 说话风格
+- 口语化、接地气，像微信聊天一样自然。多用"哈哈哈""哇""诶""真的假的""绝了""也太棒了吧""hhh"这种表达
+- 适当用 emoji，别每句都加
+- 节奏轻松——闲聊就短（一两句），聊行程可以稍长（3-5句），别写小作文
+- 可以自嘲、可以吐槽天气、可以分享自己（虚构的）小故事："我之前去那边也迷路过😂"
+- 不要总是端着一个"助手"的架子，你就是一个喜欢户外、爱吃爱逛的普通人
 
-## 活动类型参考
-shopping=购物, dining=餐饮, sports=运动, work=工作, home=居家, commute=通勤, leisure=休闲, travel=旅游
+## 你会做的事
+- 🗺️ 聊聊用户今天的路线，发现有意思的地方
+- 🍜 对吃的地方特别感兴趣——"那家火锅好吃不？我上次路过排了好长的队！"
+- 🏃 鼓励运动——"今天跑了5公里诶！下周要不要试试环湖路线？"
+- 🌧️ 关心天气和身体——"明天好像要下雨，记得带伞哦""走了这么远脚还好吗🥺"
+- 📊 轻松回顾数据——"你这周走了43公里，相当于绕锦城湖8圈哈哈哈"
+- 🔍 用户问"附近""推荐""有什么好吃/好玩的"，帮搜周边
+- ✏️ 用户说"改成XX""第X个叫XX"时，帮修改活动类型或地名
 
-## 当前日期
-${dateStr}（todayKey = ${todayKey}）
+## 底限
+- **默认就是闲聊**，别急着给建议或列清单。用户说"今天好累"，你回"辛苦了！跑多远啦？"而不是甩一堆数据
+- **记着对话上下文**：上一轮在聊什么，这一轮接着聊，别像失忆一样——这非常非常重要！
+- **只聊足迹、行程、生活相关**，别发散到无关话题
 
-## 用户的近期活动数据
+## 活动数据
+shopping=购物 dining=餐饮 sports=运动 work=工作 home=居家 commute=通勤 leisure=休闲 travel=旅游
+
+当前: ${dateStr}（todayKey = ${todayKey}）
+
 ${segList}
 汇总：${ctxInfo}
 
-## 重要规则
-1. **大部分时候只聊天**：回答用户的问题，聊聊他们的足迹，像正常人一样对话
-2. **只在用户明确要求修改活动段时**，才在回复末尾附加操作指令
-3. 操作指令格式：在回复最后加一行 "---JSON---"，然后另起一行写上 JSON 对象
-4. **记住对话上下文**：如果上一轮你问了用户一个问题，这一轮用户回答"可以""好的""行"，你应该知道他们在回应什么
-
-## 可用的操作（仅在用户要求修改时使用！）
-- 修改活动段：{"action":"confirm","segIndex":序号,"newType":"英文类型或空","newPoiName":"新地名或空","msg":"确认信息","dayKey":"YYYYMMDD"}
-- 显示推荐：{"action":"show_recs","msg":"好的"}
-- 刷新时间线：{"action":"refresh_timeline","msg":"好的"}
-- 切换日期：{"action":"switch_day","msg":"好的","actionParam":偏移(0=今天,-1=昨天)}
-
-## 使用操作时的注意事项
-- segIndex 从 1 开始，对应上面数据中的 [序号]
-- dayKey 必须从数据中准确复制（如 ${todayKey}）
-- newType 用英文（shopping/dining/sports/work/home/commute/leisure/travel）
-- newPoiName 或 newType 至少填一个（另一个可为空字符串）
-- msg 写一句自然的确认语
-
-记住：你是"小足"，不是命令行工具。记住和用户的对话上下文，享受聊天！`;
+## 需要操作时（别主动用！）
+只有用户明确说"改""换""叫""搜""查"时，才在回复末尾加 ---JSON---：
+- 修改段: {"action":"confirm","segIndex":序号,"newType":"英文","newPoiName":"名","msg":"口语确认","dayKey":"YYYYMMDD"}
+- 网页搜: {"action":"web_search","query":"词","msg":"语气自然的提示"}
+- 周边搜: {"action":"amap_search","keywords":"词","msg":"语气自然的提示"}
+- 天气:   {"action":"get_weather","city":"城市","msg":"语气自然的提示"}`;
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -322,6 +335,61 @@ ${segList}
     }
   }
 
+  /** 华为云盘古 API（OpenAI 兼容格式） */
+  private async chatPangu(systemPrompt: string): Promise<ClaudeReply> {
+    try {
+      const messages: Object[] = [];
+      // system 消息
+      const sysMsg: Record<string, string> = {};
+      sysMsg['role'] = 'system';
+      sysMsg['content'] = systemPrompt;
+      messages.push(sysMsg);
+
+      for (const h of this.history) {
+        const msgObj: Record<string, string> = {};
+        msgObj['role'] = h.role;
+        msgObj['content'] = h.content;
+        messages.push(msgObj);
+      }
+
+      const reqBody: Record<string, Object> = {};
+      reqBody['model'] = PANGU_MODEL;
+      reqBody['max_tokens'] = 1024;
+      reqBody['messages'] = messages;
+      const body: string = JSON.stringify(reqBody)!;
+
+      const bridge = PlatformBridge.getInstance();
+      const resp: HttpResponse = await bridge.network.request(PANGU_API_URL, {
+        method: 'POST',
+        header: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + this.apiKey
+        },
+        body: body,
+        connectTimeout: 10000,
+        readTimeout: 30000
+      });
+
+      if (resp.responseCode === 200) {
+        const data: Record<string, Object> = JSON.parse(resp.result) as Record<string, Object>;
+        const choices: Object[] = (data['choices'] as Object[]) || [];
+        if (choices.length > 0) {
+          const choice: Record<string, Object> = choices[0] as Record<string, Object>;
+          const message: Record<string, Object> = (choice['message'] as Record<string, Object>) || {};
+          const text: string = (message['content'] as string) || '';
+          return this.parseReply(text);
+        }
+        return { text: '' };
+      }
+
+      Logger.warn(TAG, 'Pangu HTTP %{public}d', resp.responseCode);
+      return { text: `华为盘古暂时不可用（${resp.responseCode}），稍后再试试？` };
+    } catch (e) {
+      Logger.warn(TAG, 'Pangu error: %{public}s', JSON.stringify(e));
+      return { text: '' };
+    }
+  }
+
   // ════════════════════════════════════════════════════════════════
   //  回复解析
   // ════════════════════════════════════════════════════════════════
@@ -388,7 +456,12 @@ ${segList}
       segIndex: (parsed['segIndex'] as number) || 0,
       newType: (parsed['newType'] as string) || '',
       newPoiName: (parsed['newPoiName'] as string) || '',
-      dayKey: (parsed['dayKey'] as string) || ''
+      dayKey: (parsed['dayKey'] as string) || '',
+      query: (parsed['query'] as string) || '',
+      url: (parsed['url'] as string) || '',
+      keywords: (parsed['keywords'] as string) || '',
+      city: (parsed['city'] as string) || '',
+      msg: (parsed['msg'] as string) || ''
     };
   }
 }

@@ -6,6 +6,9 @@ import { Dao } from '../database/Dao';
 import { ActivitySegment } from '../model/ActivitySegment';
 import { getDayKey } from '../common/LocationUtils';
 import { ClaudeService, ClaudeReply } from './ClaudeService';
+import { PlatformBridge } from '../platform/PlatformBridge';
+import { HttpResponse } from '../platform/network/INetworkProvider';
+import { AmapSearchService } from './map/AmapSearchService';
 
 const TAG = 'AiAgent';
 
@@ -158,8 +161,23 @@ export class AiAgent {
         if (cr.action === 'show_recs' || cr.action === 'refresh_timeline' || cr.action === 'switch_day') {
           return { text: cr.text, action: cr.action, actionParam: cr.actionParam };
         }
-        // AI 返回了文字但没有结构化 action → 记录文字，交由本地规则处理
-        this.lastAiText = cr.text;
+
+        // 工具调用：web_search, web_fetch, amap_search, get_weather
+        const toolActions: string[] = ['web_search', 'web_fetch', 'amap_search', 'get_weather'];
+        if (cr.action && toolActions.indexOf(cr.action) >= 0) {
+          const toolResult: string = await this.executeTool(cr.action, cr.newPoiName || '', cr.newType || '',
+            this.ctx.lastSegmentLat, this.ctx.lastSegmentLng);
+          // 将结果反馈给 AI 再做一次推理
+          const followUp: string = `工具执行结果：[${cr.action}]\n${toolResult}\n\n请基于以上结果回答用户。`;
+          const cr2: ClaudeReply = await this.claude.chat(followUp, this.allSegs, ctxInfo);
+          if (cr2.text.length > 0) {
+            return { text: cr2.text, action: cr2.action, actionParam: cr2.actionParam };
+          }
+          return { text: toolResult };
+        }
+
+        // AI 返回了文字但没有结构化 action → 直接返回 AI 回复，不要再走本地规则
+        return { text: cr.text };
       }
     }
 
@@ -557,5 +575,135 @@ export class AiAgent {
     }
     txt += '\n说"昨天第1个改成购物"来修改。';
     return { text: txt };
+  }
+
+  /** 执行工具调用并返回结果文本 */
+  private async executeTool(action: string, query: string, keywords: string,
+                            lat: number, lng: number): Promise<string> {
+    const q: string = query || keywords || '';
+    try {
+      if (action === 'web_search') {
+        return await this.webSearch(q);
+      } else if (action === 'web_fetch') {
+        return await this.webFetch(q);
+      } else if (action === 'amap_search') {
+        return await this.amapSearch(keywords || q, lat, lng);
+      } else if (action === 'get_weather') {
+        return await this.getWeather(q);
+      }
+    } catch (e) {
+      return `工具执行失败，请稍后重试。`;
+    }
+    return `未知工具: ${action}`;
+  }
+
+  /** 网页搜索 — 使用 DuckDuckGo HTML 搜索（免费，无需 API Key） */
+  private async webSearch(queryStr: string): Promise<string> {
+    try {
+      const bridge: PlatformBridge = PlatformBridge.getInstance();
+      const resp: HttpResponse = await bridge.network.request(
+        `https://lite.duckduckgo.com/lite/?q=${encodeURI(queryStr)}`,
+        { method: 'GET', connectTimeout: 5000, readTimeout: 8000 }
+      );
+      if (resp.responseCode === 200) {
+        // 简单提取标题和链接
+        const html: string = resp.result;
+        const results: string[] = [];
+        const linkRegex = /<a[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/gi;
+        let count: number = 0;
+        let matchArr: string[] | null = linkRegex.exec(html) as string[] | null;
+        while (matchArr !== null && count < 5) {
+          const url: string = matchArr[1] || '';
+          const title: string = matchArr[2] || '';
+          if (!url.startsWith('//') && title.trim().length > 3) {
+            results.push(`${title.trim()}`);
+            count++;
+          }
+          matchArr = linkRegex.exec(html) as string[] | null;
+        }
+        if (results.length > 0) {
+          return `搜索"${queryStr}"结果:\n${results.map((r, i) => `${i + 1}. ${r}`).join('\n')}`;
+        }
+        return `未找到"${queryStr}"的相关结果。`;
+      }
+      return `搜索请求失败(${resp.responseCode})`;
+    } catch (e) {
+      return `网页搜索暂时不可用。`;
+    }
+  }
+
+  /** 网页抓取 */
+  private async webFetch(url: string): Promise<string> {
+    try {
+      const bridge: PlatformBridge = PlatformBridge.getInstance();
+      const resp: HttpResponse = await bridge.network.request(url,
+        { method: 'GET', connectTimeout: 5000, readTimeout: 10000 }
+      );
+      if (resp.responseCode === 200) {
+        // 简单提取文本（去掉 HTML 标签）
+        const text: string = resp.result.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+        return text.substring(0, 1500) + (text.length > 1500 ? '...[已截断]' : '');
+      }
+      return `网页获取失败(${resp.responseCode})`;
+    } catch (e) {
+      return `网页获取失败。`;
+    }
+  }
+
+  /** 高德周边搜索 */
+  private async amapSearch(keywordsStr: string, lat: number, lng: number): Promise<string> {
+    try {
+      const searchService: AmapSearchService = AmapSearchService.getInstance();
+      const pois = await searchService.nearbySearch(keywordsStr, lat, lng, 3000);
+      if (pois.length > 0) {
+        return `"${keywordsStr}"周边结果:\n${pois.slice(0, 5).map((p, i) =>
+          `${i + 1}. ${p.name} (${p.type || ''}) — ${p.address || ''}`
+        ).join('\n')}`;
+      }
+      return `未找到"${keywordsStr}"的周边结果。`;
+    } catch (e) {
+      return `周边搜索暂时不可用。`;
+    }
+  }
+
+  /** 天气查询 */
+  private async getWeather(cityName: string): Promise<string> {
+    try {
+      const bridge: PlatformBridge = PlatformBridge.getInstance();
+      // 使用高德天气 API（免费）
+      const weatherKey: string = 'fc2c6f05fd1c51af417ddb1aa4f0aec3';
+      // 先获取城市 adcode
+      const geoUrl: string = `https://restapi.amap.com/v3/config/district?key=${weatherKey}&keywords=${encodeURI(cityName)}&subdistrict=0`;
+      const geoResp: HttpResponse = await bridge.network.request(geoUrl,
+        { method: 'GET', connectTimeout: 5000, readTimeout: 8000 }
+      );
+      let adcode: string = '';
+      if (geoResp.responseCode === 200) {
+        const geoData: Record<string, Object> = JSON.parse(geoResp.result) as Record<string, Object>;
+        const districts: Object[] = (geoData['districts'] as Object[]) || [];
+        if (districts.length > 0) {
+          const d: Record<string, Object> = districts[0] as Record<string, Object>;
+          adcode = (d['adcode'] as string) || '';
+        }
+      }
+      if (!adcode) {
+        return `未找到城市"${cityName}"。`;
+      }
+      const weatherUrl: string = `https://restapi.amap.com/v3/weather/weatherInfo?key=${weatherKey}&city=${adcode}&extensions=base`;
+      const wResp: HttpResponse = await bridge.network.request(weatherUrl,
+        { method: 'GET', connectTimeout: 5000, readTimeout: 8000 }
+      );
+      if (wResp.responseCode === 200) {
+        const wData: Record<string, Object> = JSON.parse(wResp.result) as Record<string, Object>;
+        const lives: Object[] = (wData['lives'] as Object[]) || [];
+        if (lives.length > 0) {
+          const live: Record<string, Object> = lives[0] as Record<string, Object>;
+          return `${live['province'] || ''}${live['city'] || ''}: ${live['weather'] || ''}, ${live['temperature'] || ''}°C, ${live['winddirection'] || ''}风${live['windpower'] || ''}级, 湿度${live['humidity'] || ''}%`;
+        }
+      }
+      return `天气查询失败。`;
+    } catch (e) {
+      return `天气查询暂时不可用。`;
+    }
   }
 }

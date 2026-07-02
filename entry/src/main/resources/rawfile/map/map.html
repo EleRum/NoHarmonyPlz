@@ -169,7 +169,8 @@
     for (var i = 0; i < points.length; i++) { path.push([points[i].lng, points[i].lat]); }
     var polyline = new AMap.Polyline({
       path: path, strokeColor: color || '#3388ff', strokeWeight: width || 6,
-      strokeOpacity: 0.8, lineJoin: 'round', lineCap: 'round', map: map, zIndex: 10
+      strokeOpacity: 0.9, lineJoin: 'miter', lineCap: 'butt',
+      bubble: true, map: map, zIndex: 10
     });
     polylines[id] = polyline;
   }
