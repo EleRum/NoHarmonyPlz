@@ -13,25 +13,291 @@
 <body>
 <div id="container"></div>
 
-<!-- 高德 JSAPI v2.0 (WebGL) — Key 已填入 -->
-<script src="https://webapi.amap.com/maps?v=2.0&key=bb0c1640992e6c7f2b1467498d8ae848&plugin=AMap.PlaceSearch,AMap.Geocoder,AMap.Geolocation"></script>
-<script src="jsapi-bridge.js"></script>
+<!-- 动态加载高德 JSAPI v2.0（非阻塞） -->
 <script>
-  // 高德 JSAPI 加载完成后自动初始化地图
-  function tryInitMap() {
-    if (typeof AMap !== 'undefined' && typeof FootMapBridge !== 'undefined') {
-      FootMapBridge.initMap({ lng: 116.3974, lat: 39.9042, zoom: 15 });
-      return true;
+(function() {
+  var s = document.createElement('script');
+  s.src = 'https://webapi.amap.com/maps?v=2.0&key=bb0c1640992e6c7f2b1467498d8ae848&plugin=AMap.PlaceSearch,AMap.Geocoder,AMap.Geolocation';
+  s.onerror = function() { console.error('[FootMap] AMap CDN load FAILED'); };
+  s.onload  = function() { console.log('[FootMap] AMap JSAPI loaded'); };
+  document.head.appendChild(s);
+})();
+</script>
+
+<!-- 地图桥接（内联） -->
+<script>
+(function () {
+  'use strict';
+
+  var map = null;
+  var markers = {};
+  var polylines = {};
+  var placeSearch = null;
+  var geocoder = null;
+  var mapReady = false;
+
+  function sendToArkTS(data) {
+    try {
+      if (window.arkTsCallback && typeof window.arkTsCallback.onMessage === 'function') {
+        window.arkTsCallback.onMessage(JSON.stringify(data));
+      }
+    } catch (e) { console.error('FootMapBridge: sendToArkTS error', e); }
+  }
+
+  // ── 地图初始化 ──
+  function initMap(configJson) {
+    try {
+      var config = typeof configJson === 'string' ? JSON.parse(configJson) : configJson;
+      if (typeof AMap === 'undefined') { console.warn('FootMapBridge: AMap not loaded'); return; }
+      if (map) {
+        console.log('FootMapBridge: map already exists, recentering');
+        mapSetCenter(config.lng || 116.3974, config.lat || 39.9042, config.zoom || 15);
+        if (mapReady) resendReady();
+        return;
+      }
+
+      map = new AMap.Map('container', {
+        zoom: config.zoom || 15,
+        center: [config.lng || 116.3974, config.lat || 39.9042],
+        mapStyle: 'amap://styles/light',
+        viewMode: '2D',
+        resizeEnable: true,
+        touchZoom: true,
+        dragEnable: true,
+        zoomEnable: true
+      });
+
+      map.on('click', function (e) {
+        sendToArkTS({ type: 'mapClick', lng: e.lnglat.getLng(), lat: e.lnglat.getLat() });
+      });
+      map.on('moveend', function () {
+        var c = map.getCenter();
+        sendToArkTS({ type: 'mapMoveEnd', lng: c.getLng(), lat: c.getLat(), zoom: map.getZoom() });
+      });
+
+      AMap.plugin(['AMap.PlaceSearch', 'AMap.Geocoder', 'AMap.Geolocation'], function () {
+        placeSearch = new AMap.PlaceSearch({ pageSize: 10, pageIndex: 1 });
+        geocoder = new AMap.Geocoder();
+        mapReady = true;
+        console.log('FootMapBridge: map ready');
+        sendToArkTS({ type: 'mapReady' });
+      });
+    } catch (e) { console.error('FootMapBridge: initMap error', e); }
+  }
+
+  function resendReady() {
+    if (mapReady) { console.log('FootMapBridge: resending mapReady'); sendToArkTS({ type: 'mapReady' }); }
+  }
+
+  // ── 相机控制 ──
+  function mapSetCenter(lng, lat, zoom) {
+    if (!map) return;
+    if (zoom) { map.setZoomAndCenter(zoom, [lng, lat]); }
+    else { map.setCenter([lng, lat]); }
+  }
+  function mapGetCenter() {
+    if (!map) return JSON.stringify({ lng: 0, lat: 0, zoom: 0 });
+    var c = map.getCenter();
+    return JSON.stringify({ lng: c.getLng(), lat: c.getLat(), zoom: map.getZoom() });
+  }
+  function mapFitBounds(swLng, swLat, neLng, neLat) {
+    if (!map) return;
+    map.setBounds(new AMap.Bounds([swLng, swLat], [neLng, neLat]));
+  }
+
+  // ── 标记点管理 ──
+  function mapAddMarker(id, lng, lat, title, iconUrl, draggable) {
+    if (!map) return;
+    removeMarker(id);
+    var opts = { position: [lng, lat], title: title || '', map: map };
+    if (iconUrl) {
+      opts.icon = iconUrl;
+      // 自定义 SVG icon 默认锚点为 top-left，设 offset 居中
+      opts.offset = new AMap.Pixel(-12, -12);
     }
-    return false;
+    if (draggable) opts.draggable = true;
+    var marker = new AMap.Marker(opts);
+    marker.on('click', function () {
+      sendToArkTS({ type: 'markerClick', id: id, lng: lng, lat: lat, title: title });
+    });
+    markers[id] = marker;
   }
-  if (!tryInitMap()) {
-    var retries = 0;
-    var timer = setInterval(function() {
-      retries++;
-      if (tryInitMap() || retries > 30) { clearInterval(timer); }
-    }, 200);
+
+  function removeMarker(id) {
+    var m = markers[id]; if (m) { m.setMap(null); delete markers[id]; }
   }
+  function mapClearMarkers() {
+    for (var id in markers) { if (markers.hasOwnProperty(id)) markers[id].setMap(null); }
+    markers = {};
+  }
+  function mapSetMarkerPosition(id, lng, lat) {
+    var m = markers[id]; if (m) m.setPosition([lng, lat]);
+  }
+  function mapSetMarkerVisible(id, visible) {
+    var m = markers[id]; if (m) m.setMap(visible ? map : null);
+  }
+
+  function mapAddMarkersBatch(markersJson) {
+    if (!map) return;
+    var list = typeof markersJson === 'string' ? JSON.parse(markersJson) : markersJson;
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i];
+      var opts = { position: [item.lng, item.lat], title: item.title || '', map: map };
+      if (item.iconUrl) {
+        opts.icon = new AMap.Icon({
+          size: item.iconSize ? new AMap.Size(item.iconSize[0], item.iconSize[1]) : new AMap.Size(24, 32),
+          image: item.iconUrl,
+          imageSize: item.iconSize ? new AMap.Size(item.iconSize[0], item.iconSize[1]) : new AMap.Size(24, 32)
+        });
+      }
+      var marker = new AMap.Marker(opts);
+      (function (mid, mlng, mlat, mtitle) {
+        marker.on('click', function () {
+          sendToArkTS({ type: 'markerClick', id: mid, lng: mlng, lat: mlat, title: mtitle });
+        });
+      })(item.id, item.lng, item.lat, item.title);
+      markers[item.id] = marker;
+    }
+  }
+
+  // ── 折线管理 ──
+  function mapAddPolyline(id, pointsJson, color, width) {
+    if (!map) return;
+    removePolyline(id);
+    var points = typeof pointsJson === 'string' ? JSON.parse(pointsJson) : pointsJson;
+    var path = [];
+    for (var i = 0; i < points.length; i++) { path.push([points[i].lng, points[i].lat]); }
+    var polyline = new AMap.Polyline({
+      path: path, strokeColor: color || '#3388ff', strokeWeight: width || 6,
+      strokeOpacity: 0.8, lineJoin: 'round', lineCap: 'round', map: map, zIndex: 10
+    });
+    polylines[id] = polyline;
+  }
+
+  function mapSetPolylinePoints(id, pointsJson) {
+    var p = polylines[id]; if (!p) return;
+    var points = typeof pointsJson === 'string' ? JSON.parse(pointsJson) : pointsJson;
+    var path = [];
+    for (var i = 0; i < points.length; i++) { path.push([points[i].lng, points[i].lat]); }
+    p.setPath(path);
+  }
+
+  function removePolyline(id) {
+    var p = polylines[id]; if (p) { p.setMap(null); delete polylines[id]; }
+  }
+  function mapSetPolylineVisible(id, visible) {
+    var p = polylines[id]; if (p) p.setMap(visible ? map : null);
+  }
+  function mapClearPolylines() {
+    for (var id in polylines) { if (polylines.hasOwnProperty(id)) polylines[id].setMap(null); }
+    polylines = {};
+  }
+
+  // ── POI 搜索 ──
+  function mapSearchNearby(keywords, centerLng, centerLat, radius) {
+    if (!placeSearch) { sendToArkTS({ type: 'searchResult', pois: [], error: 'PlaceSearch not ready' }); return; }
+    placeSearch.searchNearBy(keywords, [centerLng, centerLat], radius || 3000, function (status, result) {
+      if (status === 'complete' && result.info === 'OK') {
+        var pois = (result.poiList && result.poiList.pois) || [];
+        var out = [];
+        for (var i = 0; i < pois.length; i++) {
+          var p = pois[i];
+          out.push({
+            name: p.name || '', type: p.type || '',
+            lng: p.location ? p.location.getLng() : 0, lat: p.location ? p.location.getLat() : 0,
+            address: p.address || '', distance: p.distance || 0, tel: p.tel || ''
+          });
+        }
+        sendToArkTS({ type: 'searchResult', pois: out });
+      } else { sendToArkTS({ type: 'searchResult', pois: [], error: result.info || 'search failed' }); }
+    });
+  }
+
+  function mapLookupNearestPlace(lng, lat) {
+    if (!geocoder) { sendToArkTS({ type: 'geocodeResult', address: null, error: 'Geocoder not ready' }); return; }
+    geocoder.getAddress([lng, lat], function (status, result) {
+      if (status === 'complete' && result.info === 'OK') {
+        var addr = result.regeocode;
+        sendToArkTS({
+          type: 'geocodeResult', address: {
+            formattedAddress: addr.formattedAddress || '',
+            city: (addr.addressComponent && addr.addressComponent.city) || '',
+            district: (addr.addressComponent && addr.addressComponent.district) || '',
+            pois: (addr.pois || []).map(function (p) {
+              return { name: p.name, type: p.type, direction: p.direction, distance: p.distance };
+            })
+          }
+        });
+      } else { sendToArkTS({ type: 'geocodeResult', address: null, error: result.info || 'geocode failed' }); }
+    });
+  }
+
+  // ── 我的位置 ──
+  function mapSetMyLocation(lng, lat) {
+    if (!map) return;
+    var pos = [lng, lat];
+    if (!map._myLocationMarker) {
+      map._myLocationMarker = new AMap.Marker({
+        position: pos, map: map, zIndex: 1000,
+        icon: new AMap.Icon({
+          size: new AMap.Size(20, 20),
+          image: 'data:image/svg+xml,' + encodeURIComponent(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">' +
+            '<circle cx="10" cy="10" r="8" fill="#3388ff" stroke="#fff" stroke-width="2"/>' +
+            '<circle cx="10" cy="10" r="3" fill="#fff"/></svg>'),
+          imageSize: new AMap.Size(20, 20)
+        })
+      });
+    } else { map._myLocationMarker.setPosition(pos); }
+  }
+
+  function mapDestroy() {
+    mapClearMarkers(); mapClearPolylines();
+    if (map) { map.destroy(); map = null; }
+    mapReady = false;
+  }
+
+  // ── 导出 ──
+  window.FootMapBridge = {
+    initMap: initMap, setCenter: mapSetCenter, getCenter: mapGetCenter,
+    setZoom: function(z) { if(map)map.setZoom(z); }, fitBounds: mapFitBounds,
+    addMarker: mapAddMarker, removeMarker: removeMarker, clearMarkers: mapClearMarkers,
+    setMarkerPosition: mapSetMarkerPosition, setMarkerVisible: mapSetMarkerVisible,
+    addMarkersBatch: mapAddMarkersBatch,
+    addPolyline: mapAddPolyline, setPolylinePoints: mapSetPolylinePoints,
+    setPolylineVisible: mapSetPolylineVisible, removePolyline: removePolyline,
+    clearPolylines: mapClearPolylines,
+    searchNearby: mapSearchNearby, lookupNearestPlace: mapLookupNearestPlace,
+    setMyLocation: mapSetMyLocation, destroy: mapDestroy,
+    isReady: function () { return mapReady; },
+    _resendReady: resendReady
+  };
+  console.log('FootMapBridge: JS bridge initialized');
+})();
+</script>
+
+<!-- 自动初始化轮询 -->
+<script>
+var _initRetries = 0, _initMax = 150;
+function tryInitMap() {
+  if (typeof AMap !== 'undefined' && window.FootMapBridge &&
+      typeof window.FootMapBridge.isReady === 'function') {
+    FootMapBridge.initMap({ lng: 116.3974, lat: 39.9042, zoom: 15 });
+    return true;
+  }
+  return false;
+}
+if (!tryInitMap()) {
+  var _timer = setInterval(function() {
+    _initRetries++;
+    if (tryInitMap() || _initRetries >= _initMax) {
+      clearInterval(_timer);
+      if (_initRetries >= _initMax && !(window.FootMapBridge && window.FootMapBridge.isReady())) {
+        console.error('[FootMap] Init timeout');
+      }
+    }
+  }, 200);
+}
 </script>
 </body>
 </html>

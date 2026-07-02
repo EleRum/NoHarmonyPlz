@@ -51,11 +51,15 @@ export class MapJsBridge implements IMapService {
 
   initialize(config: MapInitConfig): void {
     this.apiKey = config.apiKey;
-    // map.html 已自包含 AMap 加载和 initMap 调用，这里仅设置中心
+    // map.html 自带 tryInitMap 自动初始化。
+    // 若 map 已就绪（JSAPI 先于 onControllerAttached 加载完毕），
+    // setCenter 后通过 _resendReady 重发 mapReady，解决 Java proxy
+    // 注册晚于 auto-init mapReady 的竞态。
     if (this.controller) {
       const js = `
         if (FootMapBridge && FootMapBridge.isReady()) {
           FootMapBridge.setCenter(${config.lng}, ${config.lat}, ${config.zoom});
+          FootMapBridge._resendReady();
         } else if (FootMapBridge) {
           FootMapBridge.initMap(${JSON.stringify({ lng: config.lng, lat: config.lat, zoom: config.zoom })});
         }
@@ -252,7 +256,22 @@ export class MapJsBridge implements IMapService {
   // ─── 事件回调 ───
 
   setEventCallbacks(callbacks: MapEventCallbacks): void {
-    this.callbacks = callbacks;
+    // Merge（而非替换），避免后来者覆盖已注册的回调（如 AmapSearchService 的 onSearchResult）
+    if (callbacks.onMapReady !== undefined) {
+      this.callbacks.onMapReady = callbacks.onMapReady;
+    }
+    if (callbacks.onMarkerClick !== undefined) {
+      this.callbacks.onMarkerClick = callbacks.onMarkerClick;
+    }
+    if (callbacks.onMapClick !== undefined) {
+      this.callbacks.onMapClick = callbacks.onMapClick;
+    }
+    if (callbacks.onSearchResult !== undefined) {
+      this.callbacks.onSearchResult = callbacks.onSearchResult;
+    }
+    if (callbacks.onGeocodeResult !== undefined) {
+      this.callbacks.onGeocodeResult = callbacks.onGeocodeResult;
+    }
   }
 
   /**

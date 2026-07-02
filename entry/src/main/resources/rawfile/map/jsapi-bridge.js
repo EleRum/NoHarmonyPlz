@@ -100,6 +100,17 @@
   }
 
   // ═══════════════════════════════════════════
+  //  重新通知就绪
+  //  解决 Java proxy 注册晚于 mapReady 发送的竞态：
+  //  ArkTS initialize() 时若 map 已就绪则调用此方法重发 mapReady
+  // ═══════════════════════════════════════════
+  function resendReady() {
+    if (mapReady) {
+      sendToArkTS({ type: 'mapReady' });
+    }
+  }
+
+  // ═══════════════════════════════════════════
   //  地图控制
   // ═══════════════════════════════════════════
   function mapSetCenter(lng, lat, zoom) {
@@ -403,7 +414,11 @@
     setMyLocation: mapSetMyLocation,
     destroy: mapDestroy,
 
-    isReady: function () { return mapReady; }
+    isReady: function () { return mapReady; },
+
+    // 重新通知就绪 — ArkTS initialize() 时若 map 已就绪则主动重发 mapReady,
+    // 解决 Java proxy 注册晚于 auto-init mapReady 发送的竞态
+    _resendReady: resendReady
   };
 
   console.log('FootMapBridge: JS bridge initialized');

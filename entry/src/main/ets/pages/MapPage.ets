@@ -330,7 +330,6 @@ export struct MapPage {
     const bridge: MapJsBridge = new MapJsBridge();
     bridge.setController(controller);
     this.mapService = bridge;
-    AmapSearchService.getInstance().setMapService(bridge);
 
     const callbacks: MapEventCallbacks = {
       onMapReady: (_err: Error | null): void => {
@@ -350,6 +349,9 @@ export struct MapPage {
       }
     };
     bridge.setEventCallbacks(callbacks);
+
+    // 在 setEventCallbacks 之后注册，确保 search callbacks 合并而非被覆盖
+    AmapSearchService.getInstance().setMapService(bridge);
 
     bridge.initialize({
       lng: this.mapCenter.longitude,
@@ -456,7 +458,7 @@ export struct MapPage {
           const tailPts: LatLng[] = [frozenEnd, animCur];
           if (!this.liveTail) {
             const tailId: string = ms.addPolyline({
-              points: tailPts, color: '#FF4444', width: 18,
+              points: tailPts, color: '#FF4444', width: 6,
               zIndex: 21, clickable: false
             });
             this.liveTail = tailId;
@@ -510,7 +512,7 @@ export struct MapPage {
            frozenEnd.longitude !== pendingGps.longitude)) {
         ms.addPolyline({
           points: [frozenEnd, pendingGps],
-          color: '#FF4444', width: 18,
+          color: '#FF4444', width: 6,
           zIndex: 20, clickable: false
         });
         frozenEnd = pendingGps;
@@ -568,7 +570,7 @@ export struct MapPage {
         }
         const polylineId: string = ms.addPolyline({
           points: pts, color: ROUTE_COLORS[ri % ROUTE_COLORS.length],
-          width: 18, zIndex: 11, clickable: false
+          width: 6, zIndex: 11, clickable: false
         });
         this.dayPolylines.push(polylineId);
         if (ri !== this.selectedDayIndex) {
