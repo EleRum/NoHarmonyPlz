@@ -14,6 +14,8 @@ export class Recommendation {
   triggerContext: string = '';
   isAccepted: number = 0;
   timestamp: number = 0;
+  /** JSON: {rating, reviewCount, popularItems, sourceUrl, source, tags} */
+  enrichmentJson: string = '';
 
   static fromResultSet(row: ValuesBucket): Recommendation {
     const rec = new Recommendation();
@@ -26,6 +28,7 @@ export class Recommendation {
     rec.triggerContext = row['trigger_context'] as string ?? '';
     rec.isAccepted = row['is_accepted'] as number ?? 0;
     rec.timestamp = row['timestamp'] as number ?? 0;
+    rec.enrichmentJson = row['enrichment_json'] as string ?? '';
     return rec;
   }
 
@@ -38,7 +41,8 @@ export class Recommendation {
       'reason': this.reason,
       'trigger_context': this.triggerContext,
       'is_accepted': this.isAccepted,
-      'timestamp': this.timestamp
+      'timestamp': this.timestamp,
+      'enrichment_json': this.enrichmentJson
     };
   }
 }

@@ -9,6 +9,11 @@ import { Dao } from '../database/Dao';
 
 const TAG = 'RecommendPage';
 
+interface EnrichmentRating { rating?: number }
+interface EnrichmentReviewCount { reviewCount?: number }
+interface EnrichmentPopularItems { popularItems?: string }
+interface EnrichmentSource { source?: string }
+
 @Component
 export struct RecommendContent {
   onTabChange: (index: number) => void = () => {};
@@ -16,9 +21,43 @@ export struct RecommendContent {
   @State isLoading: boolean = true;
 
   private dao: Dao = Dao.getInstance();
+  private pollTimer: number = -1;
 
   aboutToAppear(): void {
     Logger.info(TAG, 'RecommendPage aboutToAppear');
+    this.loadRecommendations();
+    // 启动 30 秒轮询定时器
+    this.startPolling();
+  }
+
+  aboutToDisappear(): void {
+    // 清除轮询定时器
+    this.stopPolling();
+  }
+
+  private startPolling(): void {
+    if (this.pollTimer >= 0) {
+      clearInterval(this.pollTimer);
+    }
+    this.pollTimer = setInterval(() => {
+      this.loadRecommendations();
+    }, 30000); // 30 秒
+    Logger.info(TAG, 'Started 30s polling for recommendations');
+  }
+
+  private stopPolling(): void {
+    if (this.pollTimer >= 0) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = -1;
+      Logger.info(TAG, 'Stopped recommendation polling');
+    }
+  }
+
+  /**
+   * 外部调用：切换到推荐 tab 时触发刷新
+   */
+  onTabActivated(): void {
+    Logger.info(TAG, 'Recommend tab activated, refreshing');
     this.loadRecommendations();
   }
 
@@ -94,7 +133,8 @@ export struct RecommendContent {
             Text('• 到达新地点 → 推荐附近热门去处').fontSize(12).fontColor('#666').margin({ bottom: 4 })
             Text('• 用餐时段 → 推荐符合口味的餐厅').fontSize(12).fontColor('#666').margin({ bottom: 4 })
             Text('• 周末好天气 → 推荐户外活动').fontSize(12).fontColor('#666').margin({ bottom: 4 })
-            Text('• 购物停留 → 推荐附近咖啡店').fontSize(12).fontColor('#666')
+            Text('• 购物停留 → 推荐附近咖啡店').fontSize(12).fontColor('#666').margin({ bottom: 4 })
+            Text('• 联网搜索大众点评/美团热门去处').fontSize(12).fontColor('#666')
           }
           .width('85%').padding(16).backgroundColor('#F8FAFB').borderRadius(12).margin({ top: 20 })
         }
@@ -112,6 +152,15 @@ export struct RecommendContent {
                       .fontSize(16).fontWeight(FontWeight.Medium).fontColor('#222')
                     Text(rec.reason || '根据您的偏好推荐')
                       .fontSize(13).fontColor('#666').margin({ top: 3 }).maxLines(2)
+                    // Web 富数据展示（评分/评论/推荐菜）
+                    if (rec.enrichmentJson.length > 0) {
+                      this.BuildEnrichment(
+                        this.parseEnrichmentRating(rec.enrichmentJson),
+                        this.parseEnrichmentReviewCount(rec.enrichmentJson),
+                        this.parseEnrichmentPopularItems(rec.enrichmentJson),
+                        this.parseEnrichmentSource(rec.enrichmentJson)
+                      )
+                    }
                     Row() {
                       if (rec.triggerContext) {
                         Text(`触发: ${rec.triggerContext}`)
@@ -162,5 +211,61 @@ export struct RecommendContent {
 
     }
     .width('100%').height('100%').backgroundColor('#F5F6F8')
+  }
+
+  @Builder
+  BuildEnrichment(rating: number, reviewCount: number, popularItems: string, source: string) {
+    Row() {
+      if (rating > 0) {
+        Text(`⭐ ${rating.toFixed(1)}`).fontSize(12).fontColor('#FF8C00')
+      }
+      if (reviewCount > 0) {
+        Text(` · ${reviewCount}条评论`).fontSize(12).fontColor('#FF8C00')
+      }
+      if (source.length > 0) {
+        Text(` · ${this.sourceLabel(source)}`).fontSize(11).fontColor('#AAA')
+      }
+    }.margin({ top: 3 })
+
+    if (popularItems.length > 0) {
+      Text(`推荐: ${popularItems}`).fontSize(11).fontColor('#888').margin({ top: 2 }).maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+  }
+
+  private parseEnrichmentRating(json: string): number {
+    try {
+      const data: EnrichmentRating = JSON.parse(json) as EnrichmentRating;
+      return data.rating || 0;
+    } catch (e) { return 0; }
+  }
+
+  private parseEnrichmentReviewCount(json: string): number {
+    try {
+      const data: EnrichmentReviewCount = JSON.parse(json) as EnrichmentReviewCount;
+      return data.reviewCount || 0;
+    } catch (e) { return 0; }
+  }
+
+  private parseEnrichmentPopularItems(json: string): string {
+    try {
+      const data: EnrichmentPopularItems = JSON.parse(json) as EnrichmentPopularItems;
+      return data.popularItems || '';
+    } catch (e) { return ''; }
+  }
+
+  private parseEnrichmentSource(json: string): string {
+    try {
+      const data: EnrichmentSource = JSON.parse(json) as EnrichmentSource;
+      return data.source || '';
+    } catch (e) { return ''; }
+  }
+
+  sourceLabel(source: string): string {
+    const map: Record<string, string> = {
+      'dianping': '大众点评', 'meituan': '美团',
+      'web_general': '网页', 'amap': '高德地图'
+    };
+    return map[source] || source;
   }
 }

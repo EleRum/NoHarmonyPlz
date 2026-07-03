@@ -114,7 +114,14 @@ export class AiAgent {
         const name: string = this.claude.providerName;
         return { text: `${name} API 密钥已保存！现在有网络时我会用 AI 来理解你的意图。` };
       }
-      return { text: '密钥格式不对，应该是 sk- 开头的字符串（Claude: sk-ant-xxx，DeepSeek: sk-xxx）。' };
+      // 无法自动识别（如盘古 Bearer Token）
+      if (m.includes('盘古') || m.includes('华为') || m.includes('pangu')) {
+        await this.claude.setApiKey(key, 'pangu');
+        return { text: '华为盘古密钥已保存！现在有网络时我会用 AI 来理解你的意图。' };
+      }
+      return {
+        text: '密钥格式无法自动识别。请在"设置"页面手动选择服务商后保存。\n• Claude: sk-ant-xxx\n• DeepSeek: sk-xxx\n• 华为盘古: Bearer Token（去设置页保存）'
+      };
     }
 
     // ── 尝试 AI 在线模式（传全部天数据）──

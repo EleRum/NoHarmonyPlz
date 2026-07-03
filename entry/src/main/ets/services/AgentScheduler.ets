@@ -11,6 +11,7 @@ import { APP_TAG } from '../common/Constants';
 
 const TAG = 'AgentScheduler';
 const REFRESH_INTERVAL_MS: number = 5 * 60 * 1000;
+const MIN_REFRESH_INTERVAL_MS: number = 60 * 1000;  // 最少 1 分钟间隔
 
 export class AgentScheduler {
   private static instance: AgentScheduler | null = null;
@@ -20,6 +21,8 @@ export class AgentScheduler {
   private lastLat: number = 0;
   private lastLng: number = 0;
   private running: boolean = false;
+  private refreshCycle: number = 0;
+  private lastRefreshTime: number = 0;
 
   private constructor() {
     this.dao = Dao.getInstance();
@@ -39,9 +42,26 @@ export class AgentScheduler {
     this.running = true;
 
     Logger.info(TAG, 'Agent scheduler started, lat=%{public}.4f lng=%{public}.4f', lat, lng);
-    this.refresh();
-
+    // 不立即 refresh，等待地图就绪后由 MapPage 调用 notifyMapReady()
     this.timerId = setInterval(() => { this.refresh(); }, REFRESH_INTERVAL_MS);
+  }
+
+  /**
+   * 地图就绪后调用，触发首次刷新
+   * @param lat 当前 GPS 纬度
+   * @param lng 当前 GPS 经度
+   */
+  notifyMapReady(lat: number, lng: number): void {
+    if (this.running) {
+      // 使用 GPS 实时位置覆盖 start() 中的默认值
+      if (lat !== 0 && lng !== 0) {
+        this.lastLat = lat;
+        this.lastLng = lng;
+      }
+      Logger.info(TAG, 'Map ready, triggering first refresh at lat=%{public}.4f lng=%{public}.4f',
+        this.lastLat, this.lastLng);
+      this.refresh();
+    }
   }
 
   stop(): void {
@@ -58,7 +78,9 @@ export class AgentScheduler {
   updateLocation(lat: number, lng: number): void {
     this.lastLat = lat;
     this.lastLng = lng;
-    // 位置变化 > 500m 时立即刷新
+    // 限频：距离上次刷新不足 1 分钟时跳过
+    const now: number = Date.now();
+    if (now - this.lastRefreshTime < MIN_REFRESH_INTERVAL_MS) return;
     this.refresh();
   }
 
@@ -67,6 +89,7 @@ export class AgentScheduler {
    */
   async refresh(): Promise<void> {
     if (this.lastLat === 0 && this.lastLng === 0) return;
+    this.lastRefreshTime = Date.now();
 
     try {
       const hour: number = new Date().getHours();
@@ -77,8 +100,11 @@ export class AgentScheduler {
       else if (hour >= 17 && hour < 21) context = 'dinner';
       else if (hour >= 21) context = 'night';
 
+      const doWebSearch: boolean = (this.refreshCycle % 2 === 0);
+      this.refreshCycle++;
+
       const recs: Recommendation[] =
-        await this.engine.generateNow(context, this.lastLat, this.lastLng);
+        await this.engine.generateNow(context, this.lastLat, this.lastLng, doWebSearch);
 
       // 清除旧推荐，存新的（确保位置变化后旧城市推荐不残留）
       await this.dao.deleteAllRecommendations();

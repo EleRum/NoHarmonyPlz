@@ -16,17 +16,17 @@ import { HttpResponse } from '../platform/network/INetworkProvider';
 
 const TAG = 'ClaudeService';
 
-// Claude (Anthropic Messages API)
-const CLAUDE_API_URL: string = 'https://api.anthropic.com/v1/messages';
-const CLAUDE_MODEL: string = 'claude-sonnet-4-6-20250514';
+// ─── 各服务商默认端点 / 模型 ───
+interface ProviderConfig {
+  url: string;
+  model: string;
+}
 
-// DeepSeek (OpenAI Chat Completions compatible)
-const DEEPSEEK_API_URL: string = 'https://api.deepseek.com/chat/completions';
-const DEEPSEEK_MODEL: string = 'deepseek-chat';
-
-// 华为云盘古 (OpenAI Chat Completions compatible)
-const PANGU_API_URL: string = 'https://api.modelarts.huaweicloud.com/v1/chat/completions';
-const PANGU_MODEL: string = 'pangu-pro-72b';
+const DEFAULTS: Record<string, ProviderConfig> = {
+  'claude':  { url: 'https://api.anthropic.com/v1/messages', model: 'claude-sonnet-4-6-20250514' },
+  'deepseek':{ url: 'https://api.deepseek.com/chat/completions', model: 'deepseek-chat' },
+  'pangu':   { url: 'https://api.modelarts-maas.com/v2/chat/completions', model: 'openpangu-2.0-flash' },
+};
 
 /** 对话历史中的一条消息 */
 interface ChatMessage {
@@ -58,29 +58,98 @@ export class ClaudeService {
   /** 最多保留的历史消息数 */
   private static readonly MAX_HISTORY: number = 20;
 
+  // ─── 各服务商自定义端点和模型（可从设置页覆盖默认值）───
+  private overrides: Record<string, ProviderConfig> = {};
+
   static detectProvider(key: string): 'claude' | 'deepseek' | 'pangu' | 'none' {
     if (!key || key.length === 0) return 'none';
-    if (key.startsWith('sk-hw-')) return 'pangu';
+    // Claude: sk-ant- 开头
     if (key.startsWith('sk-ant-')) return 'claude';
+    // DeepSeek: sk- 开头（但不是 sk-ant-）
     if (key.startsWith('sk-')) return 'deepseek';
+    // 盘古 / 其他：无法通过前缀自动识别，需手动选择
     return 'none';
   }
 
-  async setApiKey(key: string): Promise<void> {
+  async setApiKey(key: string, provider?: 'claude' | 'deepseek' | 'pangu'): Promise<void> {
     this.apiKey = key;
-    this.provider = ClaudeService.detectProvider(key);
+    if (key.length === 0) {
+      this.provider = 'none';
+    } else if (provider) {
+      this.provider = provider;
+    } else {
+      this.provider = ClaudeService.detectProvider(key);
+    }
     const dao: Dao = Dao.getInstance();
     await dao.upsertUserProfile('ai_api_key', key, 1);
+    // 持久化 provider 类型
+    if (this.provider !== 'none') {
+      await dao.upsertUserProfile('ai_provider', this.provider, 1);
+    } else {
+      await dao.upsertUserProfile('ai_provider', '', 1);
+    }
   }
 
-  async loadApiKey(): Promise<void> {
-    if (this.apiKey.length > 0) return;
+  /** 获取某服务商的当前端点 URL */
+  getEndpoint(provider: string): string {
+    const override: ProviderConfig | undefined = this.overrides[provider];
+    if (override && override.url.length > 0) {
+      return override.url;
+    }
+    const def: ProviderConfig | undefined = DEFAULTS[provider];
+    return def ? def.url : '';
+  }
+
+  /** 获取某服务商的当前模型名 */
+  getModel(provider: string): string {
+    const override: ProviderConfig | undefined = this.overrides[provider];
+    if (override && override.model.length > 0) {
+      return override.model;
+    }
+    const def: ProviderConfig | undefined = DEFAULTS[provider];
+    return def ? def.model : '';
+  }
+
+  /** 设置某个服务商的自定义端点和模型 */
+  async setProviderConfig(provider: string, apiUrl: string, model: string): Promise<void> {
+    let cfg: ProviderConfig = this.overrides[provider] ? this.overrides[provider] : { url: '', model: '' };
+    const def: ProviderConfig | undefined = DEFAULTS[provider];
+    const defUrl: string = (def ? def.url : '');
+    const defModel: string = (def ? def.model : '');
+    cfg.url = apiUrl || defUrl;
+    cfg.model = model || defModel;
+    this.overrides[provider] = cfg;
+    const dao: Dao = Dao.getInstance();
+    await dao.upsertUserProfile(provider + '_api_url', cfg.url, 1);
+    await dao.upsertUserProfile(provider + '_model', cfg.model, 1);
+  }
+
+  async loadApiKey(force: boolean = false): Promise<void> {
+    if (!force && this.apiKey.length > 0) return;
     const dao: Dao = Dao.getInstance();
 
     const profile = await dao.queryUserProfile('ai_api_key');
     if (profile && profile.preferenceValue) {
       this.apiKey = profile.preferenceValue;
-      this.provider = ClaudeService.detectProvider(this.apiKey);
+      // 尝试从已保存的 provider 恢复
+      const savedProvider = await dao.queryUserProfile('ai_provider');
+      if (savedProvider && savedProvider.preferenceValue) {
+        const p = savedProvider.preferenceValue;
+        if (p === 'claude' || p === 'deepseek' || p === 'pangu') {
+          this.provider = p;
+        }
+      } else {
+        this.provider = ClaudeService.detectProvider(this.apiKey);
+      }
+      // 加载各服务商自定义端点和模型
+      const providerKeys: string[] = ['claude', 'deepseek', 'pangu'];
+      for (const provider of providerKeys) {
+        const savedUrl = await dao.queryUserProfile(provider + '_api_url');
+        const savedModel = await dao.queryUserProfile(provider + '_model');
+        if (savedUrl && savedUrl.preferenceValue && savedModel && savedModel.preferenceValue) {
+          this.overrides[provider] = { url: savedUrl.preferenceValue, model: savedModel.preferenceValue };
+        }
+      }
       return;
     }
 
@@ -93,6 +162,8 @@ export class ClaudeService {
   }
 
   get hasKey(): boolean { return this.apiKey.length > 0; }
+
+  get providerType(): string { return this.provider; }
 
   get providerName(): string {
     if (this.provider === 'claude') return 'Claude';
@@ -245,14 +316,14 @@ ${segList}
       }
 
       const reqBody: Record<string, Object> = {};
-      reqBody['model'] = CLAUDE_MODEL;
+      reqBody['model'] = this.getModel('claude');
       reqBody['max_tokens'] = 1024;
       reqBody['system'] = systemPrompt;
       reqBody['messages'] = messages;
       const body: string = JSON.stringify(reqBody)!;
 
       const bridge = PlatformBridge.getInstance();
-      const resp: HttpResponse = await bridge.network.request(CLAUDE_API_URL, {
+      const resp: HttpResponse = await bridge.network.request(this.getEndpoint('claude'), {
         method: 'POST',
         header: {
           'Content-Type': 'application/json',
@@ -298,13 +369,13 @@ ${segList}
       }
 
       const reqBody: Record<string, Object> = {};
-      reqBody['model'] = DEEPSEEK_MODEL;
+      reqBody['model'] = this.getModel('deepseek');
       reqBody['max_tokens'] = 1024;
       reqBody['messages'] = messages;
       const body: string = JSON.stringify(reqBody)!;
 
       const bridge = PlatformBridge.getInstance();
-      const resp: HttpResponse = await bridge.network.request(DEEPSEEK_API_URL, {
+      const resp: HttpResponse = await bridge.network.request(this.getEndpoint('deepseek'), {
         method: 'POST',
         header: {
           'Content-Type': 'application/json',
@@ -335,31 +406,34 @@ ${segList}
     }
   }
 
-  /** 华为云盘古 API（OpenAI 兼容格式） */
+  /** 华为云盘古 API（OpenAI 兼容格式，不发送 system 角色以兼容 flash 等模型） */
   private async chatPangu(systemPrompt: string): Promise<ClaudeReply> {
     try {
       const messages: Object[] = [];
-      // system 消息
-      const sysMsg: Record<string, string> = {};
-      sysMsg['role'] = 'system';
-      sysMsg['content'] = systemPrompt;
-      messages.push(sysMsg);
 
+      // 将 system prompt 注入到第一条 user 消息前面，
+      // 因为 openpangu-2.0-flash 等轻量模型不支持 system 角色
+      let isFirstUser: boolean = true;
       for (const h of this.history) {
         const msgObj: Record<string, string> = {};
         msgObj['role'] = h.role;
-        msgObj['content'] = h.content;
+        if (h.role === 'user' && isFirstUser) {
+          msgObj['content'] = '[系统指令]\n' + systemPrompt + '\n\n[用户消息]\n' + h.content;
+          isFirstUser = false;
+        } else {
+          msgObj['content'] = h.content;
+        }
         messages.push(msgObj);
       }
 
       const reqBody: Record<string, Object> = {};
-      reqBody['model'] = PANGU_MODEL;
+      reqBody['model'] = this.getModel('pangu');
       reqBody['max_tokens'] = 1024;
       reqBody['messages'] = messages;
       const body: string = JSON.stringify(reqBody)!;
 
       const bridge = PlatformBridge.getInstance();
-      const resp: HttpResponse = await bridge.network.request(PANGU_API_URL, {
+      const resp: HttpResponse = await bridge.network.request(this.getEndpoint('pangu'), {
         method: 'POST',
         header: {
           'Content-Type': 'application/json',
@@ -379,10 +453,28 @@ ${segList}
           const text: string = (message['content'] as string) || '';
           return this.parseReply(text);
         }
+        // 无 choices，检查错误信息
+        const errMsg: string = (data['error_msg'] as string) ||
+          (data['error'] ? (data['error'] as Record<string,Object>)['message'] as string : '') || '';
+        if (errMsg.length > 0) {
+          Logger.warn(TAG, 'Pangu API returned error: %{public}s', errMsg);
+          return { text: '盘古返回错误：' + errMsg };
+        }
         return { text: '' };
       }
 
-      Logger.warn(TAG, 'Pangu HTTP %{public}d', resp.responseCode);
+      // 解析错误响应体，给出具体原因
+      let detail: string = '';
+      try {
+        const errData: Record<string, Object> = JSON.parse(resp.result) as Record<string, Object>;
+        detail = (errData['error_msg'] as string) ||
+          (errData['error'] ? (errData['error'] as Record<string,Object>)['message'] as string : '') || '';
+      } catch (e) { /* ignore */ }
+
+      Logger.warn(TAG, 'Pangu HTTP %{public}d: %{public}s', resp.responseCode, detail);
+      if (detail.length > 0) {
+        return { text: '盘古 API 错误(' + resp.responseCode + ')：' + detail };
+      }
       return { text: `华为盘古暂时不可用（${resp.responseCode}），稍后再试试？` };
     } catch (e) {
       Logger.warn(TAG, 'Pangu error: %{public}s', JSON.stringify(e));

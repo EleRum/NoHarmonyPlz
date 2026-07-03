@@ -17,6 +17,7 @@ import { ACTIVITY_LABELS } from '../common/Constants';
 import { TimelineContent } from './TimelinePage';
 import { RecommendContent } from './RecommendPage';
 import { ReportContent } from './ReportPage';
+import { SettingsContent } from './SettingsPage';
 import { AgentScheduler } from '../services/AgentScheduler';
 import { RecommendationEngine } from '../services/RecommendationEngine';
 import { AmapSearchService } from '../services/map/AmapSearchService';
@@ -60,6 +61,11 @@ interface DayRoute {
   endTime: number;
 }
 
+interface ChatBubble {
+  role: 'user' | 'ai';
+  content: string;
+}
+
 @Entry
 @Component
 export struct MapPage {
@@ -86,14 +92,19 @@ export struct MapPage {
   private markerPositions: Record<string, LatLng> = {};
   private liveMarker: string | null = null;
   private liveTail: string | null = null;
+  private liveTrailSegments: string[] = [];  // GPS 轨迹红线片段
   private dayPolylines: string[] = [];
   private dayPoiMarkers: string[][] = [];
+  private daySegMarkers: string[][] = [];
   private segMarkers: string[] = [];
   @State showRecMarkers: boolean = false;
   @State showRecPicker: boolean = false;
   @State showChat: boolean = false;
   @State chatInput: string = '';
-  @State chatMessages: string[] = ['你好！我是足迹助手，可以帮你修正活动类型、查询数据。试试说"帮助"。'];
+  @State chatMessages: ChatBubble[] = [
+    { role: 'ai', content: '你好！我是足迹助手，可以帮你修正活动类型、查询数据。试试说"帮助"。' }
+  ];
+  @State isAiThinking: boolean = false;
   @State timelineRefreshKey: number = 0;
   private aiAgent: AiAgent | null = null;
 
@@ -108,6 +119,25 @@ export struct MapPage {
   private recDotStyle: MarkerIconStyle = { color: '#FFB800', size: 36 };
   private dao: Dao = Dao.getInstance();
 
+  /** 每次绘制后同步所有元素的可见性 */
+  syncDayVisibility(): void {
+    // 确保只有当前选中天的路线和标记可见
+    for (let i = 0; i < this.dayPolylines.length; i++) {
+      if (this.dayPolylines[i].length === 0) continue;
+      try { if (this.mapService) this.mapService.setPolylineVisible(this.dayPolylines[i], i === this.selectedDayIndex); } catch (e) {}
+    }
+    for (let i = 0; i < this.dayPoiMarkers.length; i++) {
+      for (const m of this.dayPoiMarkers[i]) {
+        try { if (this.mapService) this.mapService.setMarkerVisible(m, i === this.selectedDayIndex); } catch (e) {}
+      }
+    }
+    for (let i = 0; i < this.daySegMarkers.length; i++) {
+      for (const m of this.daySegMarkers[i]) {
+        try { if (this.mapService) this.mapService.setMarkerVisible(m, i === this.selectedDayIndex); } catch (e) {}
+      }
+    }
+  }
+
   /** 切换历史天/今天时，显隐实时元素 + 今日限定内容 */
   toggleLiveElements(visible: boolean): void {
     const ms = this.mapService;
@@ -117,13 +147,8 @@ export struct MapPage {
     if (this.liveTail && ms) {
       try { ms.setPolylineVisible(this.liveTail, visible); } catch (e) {}
     }
-    for (let i = 0; i < this.dayPolylines.length; i++) {
-      try { if (ms) ms.setPolylineVisible(this.dayPolylines[i], i === this.selectedDayIndex); } catch (e) {}
-    }
-    for (let i = 0; i < this.dayPoiMarkers.length; i++) {
-      for (const m of this.dayPoiMarkers[i]) {
-        try { if (ms) ms.setMarkerVisible(m, i === this.selectedDayIndex); } catch (e) {}
-      }
+    for (const id of this.liveTrailSegments) {
+      try { if (ms) ms.setPolylineVisible(id, visible); } catch (e) {}
     }
     for (const m of this.segMarkers) {
       try { if (ms) ms.setMarkerVisible(m, visible); } catch (e) {}
@@ -236,9 +261,9 @@ export struct MapPage {
         this.footprintCount, this.dayRoutes.length);
       if (this.isMapReady && this.dayRoutes.length > 0) {
         this.drawOnMap();
-        if (this.isViewingToday) {
-          this.drawSegmentMarkers();
-        }
+        this.drawSegmentMarkers();
+        this.syncDayVisibility();
+        this.toggleLiveElements(this.isViewingToday);
       }
     } catch (err) { /* ignore */ }
   }
@@ -339,7 +364,12 @@ export struct MapPage {
         this.moveCamera();
         if (this.dayRoutes.length > 0) {
           this.drawOnMap();
+          this.drawSegmentMarkers();
+          this.syncDayVisibility();
+          this.toggleLiveElements(this.isViewingToday);
         }
+        // GPS 和地图都就绪后才触发首次推荐
+        this.tryStartRecommending();
       },
       onMarkerClick: (id: string, lat: number, lng: number, _title: string): void => {
         this.handleMapMarkerClick(id, lat, lng);
@@ -368,18 +398,35 @@ export struct MapPage {
         this.moveCamera();
         if (this.dayRoutes.length > 0) {
           this.drawOnMap();
+          this.drawSegmentMarkers();
+          this.syncDayVisibility();
+          this.toggleLiveElements(this.isViewingToday);
         }
+        // GPS 和地图都就绪后才触发首次推荐
+        this.tryStartRecommending();
       }
     });
   }
 
   /** 处理地图标记点击 */
+  private lastMarkerClickTime: number = 0;
+  private lastMarkerClickKey: string = '';
+
   handleMapMarkerClick(id: string, lat: number, lng: number): void {
     try {
       const pos: LatLng | undefined = this.markerPositions[id];
       const useLat: number = pos ? pos.latitude : lat;
       const useLng: number = pos ? pos.longitude : lng;
       const key: string = `${useLat.toFixed(6)},${useLng.toFixed(6)}`;
+
+      // 防抖：500ms 内同位置点击忽略
+      const now: number = Date.now();
+      if (key === this.lastMarkerClickKey && now - this.lastMarkerClickTime < 500) {
+        return;
+      }
+      this.lastMarkerClickTime = now;
+      this.lastMarkerClickKey = key;
+
       if (this.recDataMap[key]) {
         this.goRecDetail(id);
         return;
@@ -428,9 +475,8 @@ export struct MapPage {
             segs.length, todayFps.length);
           this.segments = await this.dao.queryAllActivitySegments(200);
           this.timelineRefreshKey++;
-          if (this.isViewingToday) {
-            this.drawSegmentMarkers();
-          }
+          this.clearSegmentMarkers();
+          this.drawSegmentMarkers();
         }
       } catch (e) { /* ignore */ }
     };
@@ -502,6 +548,8 @@ export struct MapPage {
       }
       this.locationReady = true;
       AgentScheduler.getInstance().updateLocation(gpsPt.latitude, gpsPt.longitude);
+      // GPS 定位成功后，如果地图也准备好了，触发首次推荐
+      this.tryStartRecommending();
 
       if (!this.liveMarker) {
         createBlueDot(gpsPt);
@@ -510,11 +558,12 @@ export struct MapPage {
       if (frozenEnd && pendingGps && this.isViewingToday &&
           (frozenEnd.latitude !== pendingGps.latitude ||
            frozenEnd.longitude !== pendingGps.longitude)) {
-        ms.addPolyline({
+        const segId: string = ms.addPolyline({
           points: [frozenEnd, pendingGps],
           color: '#FF4444', width: 6,
           zIndex: 20, clickable: false
         });
+        this.liveTrailSegments.push(segId);
         frozenEnd = pendingGps;
       }
       if (!frozenEnd) frozenEnd = gpsPt;
@@ -563,20 +612,23 @@ export struct MapPage {
       for (let ri = 0; ri < this.dayRoutes.length; ri++) {
         const route: DayRoute = this.dayRoutes[ri];
         const fps: Footprint[] = route.footprints;
-        if (fps.length < 2) continue;
-        const pts: LatLng[] = [];
-        for (const fp of fps) {
-          pts.push({ latitude: fp.latitude, longitude: fp.longitude });
+        let polylineId: string = '';
+        if (fps.length >= 2) {
+          const pts: LatLng[] = [];
+          for (const fp of fps) {
+            pts.push({ latitude: fp.latitude, longitude: fp.longitude });
+          }
+          polylineId = ms.addPolyline({
+            points: pts, color: ROUTE_COLORS[ri % ROUTE_COLORS.length],
+            width: 6, zIndex: 11, clickable: false
+          });
+          allPts.push(...pts);
         }
-        const polylineId: string = ms.addPolyline({
-          points: pts, color: ROUTE_COLORS[ri % ROUTE_COLORS.length],
-          width: 6, zIndex: 11, clickable: false
-        });
+        // 始终 push，保持 polyline 与 marker 数组下标一致
         this.dayPolylines.push(polylineId);
-        if (ri !== this.selectedDayIndex) {
+        if (polylineId.length > 0 && ri !== this.selectedDayIndex) {
           try { ms.setPolylineVisible(polylineId, false); } catch (e) {}
         }
-        allPts.push(...pts);
       }
 
       for (let ri = 0; ri < this.dayRoutes.length; ri++) {
@@ -602,6 +654,41 @@ export struct MapPage {
         this.dayPoiMarkers.push(markers);
       }
 
+      // 为每天绘制 segment 活动标记（自然生成的活动也显示）
+      this.daySegMarkers = [];
+      for (let ri = 0; ri < this.dayRoutes.length; ri++) {
+        const dk: string = this.dayRoutes[ri].dayKey;
+        const segMarkersForDay: string[] = [];
+        for (const seg of this.segments) {
+          if (seg.dayKey !== dk) continue;
+          const segLabel: string = seg.poiName
+            ? (this.activityEmoji(seg.activityType) + ' ' + seg.poiName)
+            : (this.activityEmoji(seg.activityType) + ' ' + (this.activityLabel(seg.activityType) || '未知活动'));
+          const segPosKey: string = `${seg.latitude.toFixed(6)},${seg.longitude.toFixed(6)}`;
+          if (this.markerMap[segPosKey]) continue;
+          const fpSeg: Footprint = new Footprint();
+          fpSeg.latitude = seg.latitude;
+          fpSeg.longitude = seg.longitude;
+          fpSeg.poiName = seg.poiName || this.activityLabel(seg.activityType);
+          fpSeg.activityTag = seg.activityType;
+          fpSeg.timestamp = seg.startTime;
+          fpSeg.stayDuration = seg.endTime - seg.startTime;
+          this.markerMap[segPosKey] = fpSeg;
+          const segMarkerId: string = ms.addMarker({
+            position: { latitude: seg.latitude, longitude: seg.longitude },
+            title: segLabel,
+            snippet: seg.summary || '',
+            clickable: true
+          });
+          this.markerPositions[segMarkerId] = { latitude: seg.latitude, longitude: seg.longitude };
+          segMarkersForDay.push(segMarkerId);
+          if (ri !== this.selectedDayIndex) {
+            try { ms.setMarkerVisible(segMarkerId, false); } catch (e) {}
+          }
+        }
+        this.daySegMarkers.push(segMarkersForDay);
+      }
+
       if (allPts.length > 0) {
         this.fitAllRoutes(allPts);
       }
@@ -616,13 +703,31 @@ export struct MapPage {
     }
   }
 
+  /** 清除所有 segment 标记，从地图上移除并清空列表 */
+  clearSegmentMarkers(): void {
+    const ms = this.mapService;
+    for (const m of this.segMarkers) {
+      if (ms) {
+        try { ms.removeMarker(m); } catch (e) {}
+      }
+    }
+    this.segMarkers = [];
+  }
+
+  /** 绘制当前选中天的 segment 标记（活动类型标记） */
   drawSegmentMarkers(): void {
     const ms = this.mapService;
     if (!ms) return;
 
-    const todayKey: string = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    // 先清除旧标记，防止重复
+    this.clearSegmentMarkers();
+
+    // 根据当前选中的天来确定 dayKey
+    if (this.selectedDayIndex < 0 || this.selectedDayIndex >= this.dayRoutes.length) return;
+    const targetDayKey: string = this.dayRoutes[this.selectedDayIndex].dayKey;
+
     for (const seg of this.segments) {
-      if (seg.dayKey !== todayKey) continue;
+      if (seg.dayKey !== targetDayKey) continue;
       const label: string = seg.poiName
         ? (this.activityEmoji(seg.activityType) + ' ' + seg.poiName)
         : (this.activityEmoji(seg.activityType) + ' ' + (this.activityLabel(seg.activityType) || '未知活动'));
@@ -792,12 +897,15 @@ export struct MapPage {
   async sendChat(): Promise<void> {
     const msg: string = this.chatInput.trim();
     if (msg.length === 0) return;
-    this.chatMessages.push('👤 ' + msg);
+    this.chatMessages.push({ role: 'user', content: msg });
     this.chatInput = '';
 
+    this.isAiThinking = true;
     this.syncAgentContext();
     const reply: AgentReply = await this.getAiAgent().process(msg);
-    this.chatMessages.push('🤖 ' + reply.text);
+    this.isAiThinking = false;
+
+    this.chatMessages.push({ role: 'ai', content: reply.text });
 
     if (reply.action === 'refresh_timeline') {
       this.triggerClassify();
@@ -809,11 +917,39 @@ export struct MapPage {
     }
   }
 
+  /**
+   * GPS 和地图都就绪后，触发首次推荐刷新
+   */
+  private recommendationStarted: boolean = false;
+
+  tryStartRecommending(): void {
+    if (this.recommendationStarted) return;
+    if (!this.isMapReady || !this.locationReady) return;
+    this.recommendationStarted = true;
+    Logger.info(TAG, 'Both map and GPS ready — starting recommendations at lat=%{public}.4f lng=%{public}.4f',
+      this.mapCenter.latitude, this.mapCenter.longitude);
+    AgentScheduler.getInstance().notifyMapReady(this.mapCenter.latitude, this.mapCenter.longitude);
+  }
+
   switchTab(index: number): void {
     if (index === this.currentTab) return;
     this.currentTab = index;
     if (index === 1) {
       this.triggerClassify();
+    } else if (index === 2) {
+      // 切换到推荐 tab 时触发一次立即刷新
+      this.triggerRecommendRefresh();
+    }
+  }
+
+  private async triggerRecommendRefresh(): Promise<void> {
+    try {
+      // 直接查询数据库获取最新推荐
+      const recs: Recommendation[] = await this.dao.queryRecentRecommendations(20);
+      // 这里可以触发 RecommendContent 刷新，但由于是独立的组件，轮询机制会处理
+      Logger.info(TAG, 'Recommend tab activated, latest recs: %{public}d', recs.length);
+    } catch (e) {
+      Logger.warn(TAG, 'Failed to refresh recommendations on tab switch');
     }
   }
 
@@ -836,9 +972,8 @@ export struct MapPage {
           segs.length, todayFps.length);
         this.segments = await this.dao.queryAllActivitySegments(200);
         this.timelineRefreshKey++;
-        if (this.isViewingToday) {
-          this.drawSegmentMarkers();
-        }
+        this.clearSegmentMarkers();
+        this.drawSegmentMarkers();
       }
     } catch (e) { /* ignore */ }
   }
@@ -874,13 +1009,15 @@ export struct MapPage {
                     const tKey: string = new Date().toISOString().slice(0, 10).replace(/-/g, '');
                     this.isViewingToday = (route.dayKey === tKey);
                     this.toggleLiveElements(this.isViewingToday);
+                    this.syncDayVisibility();
                     if (!this.isViewingToday && this.showRecMarkers) {
                       this.showRecMarkers = false;
                       for (const m of this.recMarkers) {
                         try { if (this.mapService) this.mapService.setMarkerVisible(m, false); } catch (e) {}
                       }
                     }
-                    if (this.isViewingToday) { this.drawSegmentMarkers(); }
+                    this.clearSegmentMarkers();
+                    this.drawSegmentMarkers();
                     this.focusOnDayRoute(idx);
                   })
                 })
@@ -1011,15 +1148,46 @@ export struct MapPage {
 
                 Scroll() {
                   Column() {
-                    ForEach(this.chatMessages, (msg: string) => {
+                    ForEach(this.chatMessages, (bubble: ChatBubble) => {
                       Row() {
-                        Text(msg).fontSize(13).fontColor('#333')
-                          .padding(10).backgroundColor('#F0F2F5').borderRadius(12)
-                          .maxLines(10).textOverflow({ overflow: TextOverflow.Clip })
+                        if (bubble.role === 'user') {
+                          // 用户消息靠右，紫色气泡
+                          Blank()
+                          Text(bubble.content).fontSize(13).fontColor('#FFFFFF')
+                            .padding(10).backgroundColor('#8B5CF6').borderRadius(12)
+                            .maxLines(10).constraintSize({ maxWidth: '75%' })
+                            .textOverflow({ overflow: TextOverflow.Clip })
+                            .border({ width: 0.5, color: '#7C3AED' })
+                        } else {
+                          // AI 消息靠左，灰色气泡
+                          Text(bubble.content).fontSize(13).fontColor('#333')
+                            .padding(10).backgroundColor('#F0F2F5').borderRadius(12)
+                            .maxLines(10).constraintSize({ maxWidth: '80%' })
+                            .textOverflow({ overflow: TextOverflow.Clip })
+                          Blank()
+                        }
                       }.width('100%').margin({ bottom: 6 })
                     })
+
+                    // AI 思考中指示器
+                    if (this.isAiThinking) {
+                      Row() {
+                        Column() {
+                          LoadingProgress()
+                            .width(14).height(14).color('#8B5CF6')
+                        }
+                        .margin({ right: 6 })
+                        Text('正在思考…').fontSize(12).fontColor('#8B5CF6')
+                        Blank()
+                      }
+                      .width('100%')
+                      .padding({ left: 6, top: 6, bottom: 4 })
+                      .backgroundColor('#F3F0FF')
+                      .borderRadius(10)
+                      .margin({ bottom: 4 })
+                    }
                   }
-                }.height(180).margin({ bottom: 8 })
+                }.height(200).margin({ bottom: 8 })
 
                 Row() {
                   TextInput({ placeholder: '输入指令...', text: this.chatInput })
@@ -1052,6 +1220,9 @@ export struct MapPage {
         if (this.currentTab === 3) {
           ReportContent({ onTabChange: (idx: number): void => { this.switchTab(idx); } })
         }
+        if (this.currentTab === 4) {
+          SettingsContent({ onTabChange: (idx: number): void => { this.switchTab(idx); } })
+        }
       }
       .width('100%').layoutWeight(1)
 
@@ -1060,6 +1231,7 @@ export struct MapPage {
         this.BuildTab('📅', '时间线', 1)
         this.BuildTab('💡', '推荐', 2)
         this.BuildTab('📊', '报告', 3)
+        this.BuildTab('⚙️', '设置', 4)
       }
       .width('100%').height(54).backgroundColor('#FFFFFF')
       .border({ width: { top: 0.5 }, color: '#E8E8E8' })

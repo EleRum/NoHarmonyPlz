@@ -8,7 +8,7 @@ import { window } from '@kit.ArkUI';
 import { PlatformBridge } from '../platform/PlatformBridge';
 import { DatabaseHelper } from '../database/DatabaseHelper';
 import { Dao } from '../database/Dao';
-import { LocationService } from '../services/LocationService';
+import { LocationService, LocationRecord } from '../services/LocationService';
 import { PhotoService } from '../services/PhotoService';
 import { AgentScheduler } from '../services/AgentScheduler';
 import { MockDataService } from '../services/MockDataService';
@@ -50,9 +50,14 @@ export default class EntryAbility extends UIAbility {
         Logger.info(APP_TAG, 'Photo scan added %{public}d photo footprints', count);
       });
 
-      // 启动推荐引擎（初始位置 fallback 到成都）
-      let startLat: number = 30.5723;
-      let startLng: number = 104.0665;
+      // 启动推荐引擎（优先用真实定位，无定位时空启动不刷新）
+      let startLat: number = 0;
+      let startLng: number = 0;
+      const lastLoc: LocationRecord | null = this.locationService.getLastLocation();
+      if (lastLoc && lastLoc.lat !== 0 && lastLoc.lng !== 0) {
+        startLat = lastLoc.lat;
+        startLng = lastLoc.lng;
+      }
       this.scheduler.start(startLat, startLng);
       Logger.info(APP_TAG, 'AI Agent scheduler started');
 

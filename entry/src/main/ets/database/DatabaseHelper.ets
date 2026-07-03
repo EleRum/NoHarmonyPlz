@@ -106,7 +106,8 @@ export class DatabaseHelper {
         reason TEXT DEFAULT '',
         trigger_context TEXT DEFAULT '',
         is_accepted INTEGER DEFAULT 0,
-        timestamp INTEGER DEFAULT 0
+        timestamp INTEGER DEFAULT 0,
+        enrichment_json TEXT DEFAULT ''
       )
     `;
 
@@ -128,6 +129,15 @@ export class DatabaseHelper {
       );
 
       Logger.info(TAG, 'All tables created successfully');
+
+      // 迁移：为已有 recommendation 表添加 enrichment_json 列
+      try {
+        await this.db.executeSql(
+          `ALTER TABLE ${TABLE_RECOMMENDATION} ADD COLUMN enrichment_json TEXT DEFAULT ''`
+        );
+      } catch (e) {
+        // 列已存在，忽略
+      }
     } catch (err) {
       Logger.error(TAG, 'Failed to create tables: %{public}s', JSON.stringify(err));
     }

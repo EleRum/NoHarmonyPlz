@@ -17,7 +17,7 @@ import { GeoLocation } from '../platform/location/ILocationProvider';
 
 const TAG = 'LocationService';
 
-interface LocationRecord {
+export interface LocationRecord {
   lat: number;
   lng: number;
   time: number;
@@ -37,6 +37,11 @@ export class LocationService {
       LocationService.instance = new LocationService();
     }
     return LocationService.instance;
+  }
+
+  /** 获取最后已知位置（供 AgentScheduler 初始化用） */
+  getLastLocation(): LocationRecord | null {
+    return this.lastLocation;
   }
 
   /**
