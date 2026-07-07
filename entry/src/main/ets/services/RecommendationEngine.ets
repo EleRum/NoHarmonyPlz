@@ -15,7 +15,6 @@ import { PlatformBridge } from '../platform/PlatformBridge';
 import { HttpResponse } from '../platform/network/INetworkProvider';
 import { WebRecommendationService, WebPlaceResult } from './WebRecommendationService';
 import { nameSimilarity } from './WebSearchParser';
-import { nameSimilarity } from './WebSearchParser';
 import { ClaudeService, ClaudeReply } from './ClaudeService';
 
 const TAG = 'RecommendationEngine';
@@ -175,7 +174,7 @@ export class RecommendationEngine {
       allMerged.length, aiQueries.length, webPlaces.length, MIN_RECS);
 
     if (allMerged.length > 0) {
-      let mixed: Recommendation[] = await this.rankAndWrapMerged(allMerged, pref, contextType, lat, lng);
+      let mixed: Recommendation[] = await this.rankAndWrapMerged(allMerged, pref, 'dining', contextType, lat, lng);
       // 数量不足时混合同城历史补齐，避免单独一页全是"你曾去过"
       if (mixed.length < MIN_RECS) {
         const historyRecs: Recommendation[] = await this.fallbackRecs(cityName, contextType, pref, lat, lng);
@@ -194,7 +193,7 @@ export class RecommendationEngine {
     for (const radius of SEARCH_RADII) {
       const anyPois: PoiResult[] = await this.amapSearchRadius('', lat, lng, radius);
       if (anyPois.length >= MIN_RECS) {
-        const recs: Recommendation[] = this.rankAndWrap(anyPois, pref, contextType, lat, lng);
+        const recs: Recommendation[] = this.rankAndWrap(anyPois, pref, 'dining', contextType, lat, lng);
         this.resultCache = recs;
         return recs;
       }
@@ -529,15 +528,16 @@ export class RecommendationEngine {
     }
     mixed = mixed.slice(0, MIN_RECS);
 
-    // 从 Amap place/around 响应中直接提取的照片 URL（已存储在各 POI 中）
-    for (let i = 0; i < mixed.length; i++) {
-      const r: Recommendation = mixed[i];
-      const photoUrl: string = places[i] ? places[i].photoUrl : '';
-      if (photoUrl) {
+    // 从 Amap place/around 响应中提取照片（按名称映射，不依赖索引顺序）
+    const photoMap: Record<string, string> = {};
+    for (const p of places) { if (p.photoUrl) photoMap[p.placeName] = p.photoUrl; }
+    for (const r of mixed) {
+      const url: string = photoMap[r.placeName] || '';
+      if (url) {
         try {
           const ej: Record<string, Object> = r.enrichmentJson.length > 0
             ? JSON.parse(r.enrichmentJson) as Record<string, Object> : {};
-          ej['photoUrl'] = photoUrl;
+          ej['photoUrl'] = url;
           r.enrichmentJson = JSON.stringify(ej);
         } catch (e) { /* ignore */ }
       }
@@ -808,7 +808,8 @@ export class RecommendationEngine {
       [['烘焙', '面包', '蛋糕'], '新鲜出炉，香甜可口'],
       [['快餐', '汉堡', '炸鸡', '披萨', '肯德基', '麦当劳'], '快速美味，随时享用'],
     ];
-    for (const [kws, desc] of descMap) {
+    for (const entry of descMap) {
+      const kws: string[] = entry[0]; const desc: string = entry[1];
       for (const kw of kws) { if (name.includes(kw)) return desc; }
     }
     // 通用兜底：通过名称长度和结尾词推断

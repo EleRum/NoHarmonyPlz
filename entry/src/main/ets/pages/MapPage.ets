@@ -25,6 +25,12 @@ import { Recommendation } from '../model/Recommendation';
 import { AiAgent, AgentReply } from '../services/AiAgent';
 import { CalibrationService } from '../services/CalibrationService';
 import { CalibrationSignal } from '../common/CalibrationSignal';
+import { TourGuideService, TourNarration } from '../services/TourGuideService';
+import { TourPlannerService } from '../services/TourPlannerService';
+import { TourPanel } from './TourPanel';
+import { TourPoi } from '../model/TourPoi';
+import { TourPlan, TourDay } from '../model/TourDay';
+import { TourContent } from './TourContent';
 import { IMapService, MapEventCallbacks } from '../services/map/IMapService';
 import { MapJsBridge } from '../services/map/MapJsBridge';
 import {
@@ -117,9 +123,17 @@ export struct MapPage {
   ];
   @State isAiThinking: boolean = false;
   @State timelineRefreshKey: number = 0;
-  private lastProcessedCalTs: number = 0;  // 已处理的校准时间戳，避免重复刷新
-  private calPoller: number | null = null;  // 定时器ID
+  private lastProcessedCalTs: number = 0;
+  private calPoller: number | null = null;
   private aiAgent: AiAgent | null = null;
+  // 导游模式
+  @State tourActive: boolean = false;
+  @State tourNarration: TourNarration | null = null;
+  private tourPlan: TourPlan | null = null;
+  private tourGuide: TourGuideService = TourGuideService.getInstance();
+  private tourPlanner: TourPlannerService = new TourPlannerService();
+  private tourDayMarkers: string[] = [];
+  private tourPolylines: string[] = [];
 
   private getAiAgent(): AiAgent {
     if (!this.aiAgent) this.aiAgent = new AiAgent(this.dao);
@@ -625,6 +639,10 @@ export struct MapPage {
       }
       this.locationReady = true;
       AgentScheduler.getInstance().updateLocation(gpsPt.latitude, gpsPt.longitude);
+      // 导游模式 GPS 传递
+      if (this.tourActive) {
+        this.tourGuide.onLocationChange(loc.latitude, loc.longitude);
+      }
       // GPS 定位成功后，如果地图也准备好了，触发首次推荐
       this.tryStartRecommending();
 
@@ -790,6 +808,47 @@ export struct MapPage {
     }
     this.segMarkers = [];
     this.segmentInfoMap = {};
+  }
+
+  /** 绘制行程路线和 POI 标记 */
+  drawTourOnMap(): void {
+    const ms: IMapService | null = this.mapService;
+    if (!ms || !this.tourPlan) return;
+    // 清除旧标记
+    for (const m of this.tourDayMarkers) { try { ms.removeMarker(m); } catch (e) {} }
+    for (const p of this.tourPolylines) { try { ms.removePolyline(p); } catch (e) {} }
+    this.tourDayMarkers = [];
+    this.tourPolylines = [];
+
+    for (const day of this.tourPlan.days) {
+      const pts: LatLng[] = [];
+      for (const poi of day.pois) {
+        if (poi.lat && poi.lng) {
+          pts.push({ latitude: poi.lat, longitude: poi.lng });
+          const mid: string = ms.addMarker({
+            position: { latitude: poi.lat, longitude: poi.lng },
+            title: `D${day.dayIndex + 1}-${poi.orderIndex + 1} ${poi.name}`,
+            snippet: poi.narration || '',
+            clickable: true
+          });
+          this.tourDayMarkers.push(mid);
+        }
+      }
+      // 画路线
+      if (pts.length >= 2) {
+        const colors: string[] = ['#E91E63','#2196F3','#4CAF50','#FF9800','#9C27B0'];
+        const pid: string = ms.addPolyline({ points: pts, color: colors[day.dayIndex % colors.length], width: 4 });
+        this.tourPolylines.push(pid);
+      }
+    }
+    // 聚焦到第一天
+    const allPts: LatLng[] = [];
+    for (const day of this.tourPlan.days) {
+      for (const poi of day.pois) {
+        if (poi.lat) allPts.push({ latitude: poi.lat, longitude: poi.lng });
+      }
+    }
+    if (allPts.length > 0) this.fitAllRoutes(allPts);
   }
 
   /** 绘制当前选中天的 segment 标记（活动类型标记） */
@@ -1006,6 +1065,33 @@ export struct MapPage {
     } else if (reply.action === 'switch_day') {
       this.selectedDayIndex = reply.actionParam || 0;
       this.focusOnDayRoute(this.selectedDayIndex);
+    } else if (reply.action === 'tour_plan_ready' && reply.tourPlan) {
+      // 行程生成完成 → 显示在地图上
+      this.showTourPlan(reply.tourPlan);
+    } else if (reply.text.includes('开始导游')) {
+      this.startTourFromChat();
+    }
+  }
+
+  /** 在地图上展示行程 */
+  showTourPlan(plan: TourPlan): void {
+    this.tourActive = true;
+    this.tourPlan = plan;
+    this.tourGuide.startTour(plan);
+    this.tourGuide.onNarration((n: TourNarration) => { this.tourNarration = n; });
+    this.drawTourOnMap();
+    // 切换到游记模式显示
+    this.chatMessages.push({ role: 'ai',
+      content: `🗺️ 行程已加载到地图！点击右下角 🎙️ 按钮开始/停止导游。\n当前: ${plan.days[0]?.label || 'Day 1'}` });
+  }
+
+  /** 从聊天触发开始导游（已有行程时） */
+  startTourFromChat(): void {
+    if (this.tourPlan && !this.tourActive) {
+      this.tourActive = true;
+      this.tourGuide.startTour(this.tourPlan);
+      this.tourGuide.onNarration((n: TourNarration) => { this.tourNarration = n; });
+      this.drawTourOnMap();
     }
   }
 
@@ -1021,6 +1107,22 @@ export struct MapPage {
     Logger.info(TAG, 'Both map and GPS ready — starting recommendations at lat=%{public}.4f lng=%{public}.4f',
       this.mapCenter.latitude, this.mapCenter.longitude);
     AgentScheduler.getInstance().notifyMapReady(this.mapCenter.latitude, this.mapCenter.longitude);
+  }
+
+  /** 切换导游模式 */
+  toggleTourMode(): void {
+    if (this.tourActive) {
+      this.tourActive = false;
+      this.tourGuide.stopTour();
+      this.tourNarration = null;
+      Logger.info(TAG, 'Tour mode deactivated');
+    } else {
+      this.tourActive = true;
+      this.tourGuide.onNarration((n: TourNarration) => {
+        this.tourNarration = n;
+      });
+      Logger.info(TAG, 'Tour mode activated');
+    }
   }
 
   switchTab(index: number): void {
@@ -1194,6 +1296,20 @@ export struct MapPage {
           }
           .width('100%').padding({ right: 12 }).margin({ top: 176 })
 
+          // 导游浮钮 → 跳转导游 Tab
+          Row() {
+            Blank()
+            Column() {
+              Text('🗺️').fontSize(20)
+              Text('导游').fontSize(9).fontColor('#FFFFFF').margin({ top: 1 })
+            }
+            .width(48).height(48).borderRadius(24)
+            .backgroundColor('#CC10B981').justifyContent(FlexAlign.Center)
+            .shadow({ radius: 6, color: '#4010B981', offsetY: 2 })
+            .onClick(() => { this.currentTab = 5; })
+          }
+          .width('100%').padding({ right: 12 }).margin({ top: 232 })
+
           // 推荐选择面板
           if (this.showRecPicker) {
             Column() {
@@ -1304,6 +1420,26 @@ export struct MapPage {
             .width('100%').height('100%')
             .position({ x: 0, y: 0 }).zIndex(101)
           }
+
+          // 导游讲解卡片覆盖层
+          if (this.tourActive) {
+            TourPanel({
+              narration: this.tourNarration,
+              onNext: () => {
+                const next: TourPoi | null = this.tourGuide.advanceToNext();
+                if (next) {
+                  this.tourNarration = {
+                    poi: next,
+                    text: next.narration || `下一站: ${next.name}`,
+                    show: true
+                  };
+                } else {
+                  this.tourNarration = null;
+                }
+              },
+              onClose: () => { this.tourNarration = null; }
+            })
+          }
         }
         .width('100%').height('100%')
 
@@ -1320,6 +1456,26 @@ export struct MapPage {
         if (this.currentTab === 4) {
           SettingsContent({ onTabChange: (idx: number): void => { this.switchTab(idx); } })
         }
+        if (this.currentTab === 5) {
+          TourContent({
+            plan: this.tourPlan,
+            tourActive: this.tourActive,
+            onStart: () => {
+              if (this.tourPlan) {
+                this.tourActive = true;
+                this.tourGuide.startTour(this.tourPlan);
+                this.tourGuide.onNarration((n: TourNarration) => { this.tourNarration = n; });
+                this.drawTourOnMap();
+              }
+            },
+            onStop: () => {
+              this.tourActive = false;
+              this.tourGuide.stopTour();
+              this.tourNarration = null;
+            },
+            onTabChange: (idx: number): void => { this.switchTab(idx); }
+          })
+        }
       }
       .width('100%').layoutWeight(1)
 
@@ -1328,6 +1484,7 @@ export struct MapPage {
         this.BuildTab('📅', '时间线', 1)
         this.BuildTab('💡', '推荐', 2)
         this.BuildTab('📊', '报告', 3)
+        this.BuildTab('🗺️', '导游', 5)
         this.BuildTab('⚙️', '设置', 4)
       }
       .width('100%').height(54).backgroundColor('#FFFFFF')

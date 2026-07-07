@@ -11,6 +11,9 @@ import { CalibrationSource } from '../common/Constants';
 import { PlatformBridge } from '../platform/PlatformBridge';
 import { HttpResponse } from '../platform/network/INetworkProvider';
 import { AmapSearchService } from './map/AmapSearchService';
+import { TourPlannerService } from './TourPlannerService';
+import { TourProfile } from '../model/TourProfile';
+import { TourPlan } from '../model/TourDay';
 
 const TAG = 'AiAgent';
 
@@ -59,6 +62,7 @@ export interface AgentContext {
 export interface AgentReply {
   text: string;
   action?: string; actionParam?: number;
+  tourPlan?: TourPlan;
 }
 
 export class AiAgent {
@@ -70,6 +74,12 @@ export class AiAgent {
   private dayForAllSegs: string[] = [];   // allSegs 对应的 dayKey
   private lastAiText: string = '';
   private claude: ClaudeService = new ClaudeService();
+  // 导游模式状态
+  private tourProfile: TourProfile | null = null;
+  private tourQuestionIndex: number = 0;
+  private tourQuestions: string[] = [];
+  private tourPlanner: TourPlannerService = new TourPlannerService();
+  private planningTour: boolean = false;
 
   constructor(dao: Dao) {
     this.dao = dao;
@@ -124,6 +134,14 @@ export class AiAgent {
       return {
         text: '密钥格式无法自动识别。请在"设置"页面手动选择服务商后保存。\n• Claude: sk-ant-xxx\n• DeepSeek: sk-xxx\n• 华为盘古: Bearer Token（去设置页保存）'
       };
+    }
+
+    // ── 导游模式：行程规划（优先于 AI 在线模式）──
+    if (this.planningTour && this.tourProfile) {
+      return await this.handleTourAnswer(m);
+    }
+    if (this.includesAny(m, '导游,规划行程,制定行程,安排行程,旅游计划,做攻略,怎么玩')) {
+      return this.startTourPlanning();
     }
 
     // ── 尝试 AI 在线模式（传全部天数据）──
@@ -689,6 +707,134 @@ export class AiAgent {
     } catch (e) {
       return `周边搜索暂时不可用。`;
     }
+  }
+
+  // ─── 导游模式：协作式行程规划 ───
+
+  private tourChatHistory: string[] = [];  // 对话历史
+
+  private startTourPlanning(): AgentReply {
+    this.planningTour = true;
+    this.tourProfile = new TourProfile();
+    this.tourChatHistory = [];
+    this.tourChatHistory.push('用户: 导游');
+    this.tourChatHistory.push('助手: 好嘞！想探索哪个城市？什么时候出发？玩几天？跟我说说你的想法~');
+    return { text: '好嘞！想探索哪个城市？什么时候出发？玩几天？跟我说说你的想法~' };
+  }
+
+  private async handleTourAnswer(msg: string): Promise<AgentReply> {
+    if (!this.tourProfile) return { text: '出了点问题，重新开始吧。说"导游"试试。' };
+
+    this.tourChatHistory.push(`用户: ${msg}`);
+
+    // 收集了足够信息后（对话 ≥ 4 轮），尝试生成行程
+    if (this.tourChatHistory.length >= 8) {
+      return await this.finalizeTourPlan(msg);
+    }
+
+    // 继续对话：让 AI 自然地追问下一个问题
+    try {
+      const prompt: string = `你是旅行规划助手。用户在跟你讨论旅行计划。
+对话历史:
+${this.tourChatHistory.join('\n')}
+
+请自然回复（30字以内）：追问你还需要知道的信息（日期/天数/人数/预算/兴趣/体力/交通方式），或建议行程思路。不要生成完整行程。`;
+
+      const reply: ClaudeReply = await this.claude.chatSimple(prompt);
+      if (reply.text.length > 0) {
+        this.tourChatHistory.push(`助手: ${reply.text}`);
+        return { text: reply.text };
+      }
+    } catch (e) { /* ignore */ }
+
+    // AI 不可用时用简单追问
+    const fallbacks: string[] = ['想去哪个城市？', '玩几天？', '几个人？', '预算偏好？', '兴趣呢？吃美食/拍照/历史/自然/逛街？', '体力如何？暴走还是轻松？'];
+    const idx: number = Math.floor(this.tourChatHistory.length / 2) - 1;
+    const fb: string = idx < fallbacks.length ? fallbacks[idx] : '还有啥特别要求吗？';
+    this.tourChatHistory.push(`助手: ${fb}`);
+    return { text: fb };
+  }
+
+  private async finalizeTourPlan(msg: string): Promise<AgentReply> {
+    this.planningTour = false;
+
+    // 用 AI 从对话中提取结构化画像
+    const profile: TourProfile = new TourProfile();
+    try {
+      const prompt: string = `从以下对话提取旅行偏好，返回 JSON:
+${this.tourChatHistory.join('\n')}
+
+返回格式: {"city":"成都","days":2,"groupSize":1,"budget":"适中","interests":["吃","拍照"],"energy":"轻松","startDate":"下周六"}
+只返回JSON，不要解释。`;
+
+      const reply: ClaudeReply = await this.claude.chatSimple(prompt);
+      if (reply.text.length > 0) {
+        const jsonMatch: RegExpExecArray | null = new RegExp('\\{[^}]+\\}').exec(reply.text);
+        if (jsonMatch) {
+          const o: Record<string, Object> = JSON.parse(jsonMatch[0]) as Record<string, Object>;
+          profile.city = (o['city'] as string) || '';
+          profile.days = (o['days'] as number) || 1;
+          profile.groupSize = (o['groupSize'] as number) || 1;
+          profile.budget = (o['budget'] as string) || '适中';
+          profile.interests = (o['interests'] as string[]) || [];
+          profile.energy = (o['energy'] as string) || '适中';
+          profile.extraNotes = (o['startDate'] as string) || '';
+        }
+      }
+    } catch (e) { /* use defaults */ }
+
+    // 兜底：聊天记录中简单提取城市和天数
+    if (!profile.city) {
+      const cities: string[] = ['成都','北京','上海','杭州','西安','重庆','南京','厦门','大理','丽江'];
+      for (const c of cities) {
+        for (const h of this.tourChatHistory) { if (h.includes(c)) { profile.city = c; break; } }
+        if (profile.city) break;
+      }
+      if (!profile.city) profile.city = '成都';
+    }
+    if (profile.days < 1) profile.days = 1;
+
+    // 生成行程
+    const plan: TourPlan = await this.tourPlanner.generatePlan(profile);
+
+    // 确保至少有1天有POI
+    if (plan.days.length === 0 || plan.days[0].pois.length === 0) {
+      const fb: TourPlan = new TourPlan();
+      fb.name = `${profile.city} ${profile.days}日游`;
+      for (let d = 0; d < profile.days; d++) {
+        const day: TourDay = new TourDay();
+        day.dayIndex = d;
+        day.label = `Day ${d + 1}`;
+        day.startTime = '09:00';
+        day.endTime = '18:00';
+        const tp: TourPoi = new TourPoi();
+        tp.name = `${profile.city}热门景点`;
+        tp.narration = `欢迎来到${profile.city}！开启美好旅程`;
+        tp.poiId = 'fallback';
+        day.pois.push(tp);
+        fb.days.push(day);
+      }
+      this.tourProfile = null;
+      this.tourChatHistory = [];
+      return { text: `📋 **${fb.name}**\n行程大纲已生成，切换到 🗺️ 导游 Tab 查看`, action: 'tour_plan_ready', tourPlan: fb };
+    }
+
+    let preview: string = `📋 **${plan.name}**\n\n`;
+    for (const day of plan.days) {
+      preview += `**${day.label}** (${day.startTime}-${day.endTime})\n`;
+      for (const poi of day.pois) {
+        preview += `  ${poi.orderIndex + 1}. ${poi.name}`;
+        if (poi.suggestedDuration) preview += ` (${poi.suggestedDuration})`;
+        if (poi.avgCost) preview += ` · ${poi.avgCost}`;
+        preview += '\n';
+      }
+      preview += '\n';
+    }
+    preview += '行程已生成！切换到 🗺️ 导游 Tab 查看';
+
+    this.tourProfile = null;
+    this.tourChatHistory = [];
+    return { text: preview, action: 'tour_plan_ready', tourPlan: plan };
   }
 
   /** 天气查询 */
