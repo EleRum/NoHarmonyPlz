@@ -23,6 +23,8 @@ import { RecommendationEngine } from '../services/RecommendationEngine';
 import { AmapSearchService } from '../services/map/AmapSearchService';
 import { Recommendation } from '../model/Recommendation';
 import { AiAgent, AgentReply } from '../services/AiAgent';
+import { CalibrationService } from '../services/CalibrationService';
+import { CalibrationSignal } from '../common/CalibrationSignal';
 import { IMapService, MapEventCallbacks } from '../services/map/IMapService';
 import { MapJsBridge } from '../services/map/MapJsBridge';
 import {
@@ -61,6 +63,14 @@ interface DayRoute {
   endTime: number;
 }
 
+interface SegmentCalibrationInfo {
+  segmentStartTime: number;
+  segmentEndTime: number;
+  dayKey: string;
+  activityTag: string;
+  poiName: string;
+}
+
 interface ChatBubble {
   role: 'user' | 'ai';
   content: string;
@@ -90,6 +100,7 @@ export struct MapPage {
   @State bubbleY: number = 0;
   private markerMap: Record<string, Footprint> = {};
   private markerPositions: Record<string, LatLng> = {};
+  private segmentInfoMap: Record<string, SegmentCalibrationInfo> = {};  // 段校准信息，按位置键索引
   private liveMarker: string | null = null;
   private liveTail: string | null = null;
   private liveTrailSegments: string[] = [];  // GPS 轨迹红线片段
@@ -106,6 +117,8 @@ export struct MapPage {
   ];
   @State isAiThinking: boolean = false;
   @State timelineRefreshKey: number = 0;
+  private lastProcessedCalTs: number = 0;  // 已处理的校准时间戳，避免重复刷新
+  private calPoller: number | null = null;  // 定时器ID
   private aiAgent: AiAgent | null = null;
 
   private getAiAgent(): AiAgent {
@@ -245,6 +258,23 @@ export struct MapPage {
     Logger.info(TAG, 'MapPage aboutToAppear');
     this.loadAllData();
     this.requestLocation();
+    // 启动校准轮询：每2秒检查 WaypointDetailPage 是否发出了校准变更信号
+    // 使用模块级变量，不依赖 AppStorage / onPageShow / @Watch（跨版本保证生效）
+    this.calPoller = setInterval(() => {
+      const result = CalibrationSignal.consume(this.lastProcessedCalTs);
+      if (result.hasNew) {
+        this.lastProcessedCalTs = result.newTs;
+        Logger.info(TAG, 'Calibration poller detected change (ts=%{public}d), refreshing markers', result.newTs);
+        this.refreshCalibrationsAndRedraw();
+      }
+    }, 2000);
+  }
+
+  aboutToDisappear(): void {
+    if (this.calPoller) {
+      clearInterval(this.calPoller);
+      this.calPoller = null;
+    }
   }
 
   async loadAllData(): Promise<void> {
@@ -252,6 +282,8 @@ export struct MapPage {
       this.footprints = await this.dao.queryAllFootprintsUnlimited();
       this.footprintCount = this.footprints.length;
       this.segments = await this.dao.queryAllActivitySegments(200);
+      // 对已加载的所有段应用校准覆盖（确保地图标记立即反映用户/AI修正）
+      await this.applyCalibrationsToAllSegments();
       this.buildDayRoutes();
       if (this.dayRoutes.length > 0) {
         const tKey: string = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -266,6 +298,49 @@ export struct MapPage {
         this.toggleLiveElements(this.isViewingToday);
       }
     } catch (err) { /* ignore */ }
+  }
+
+  /** 对所有已加载段按天应用校准覆盖 */
+  async applyCalibrationsToAllSegments(): Promise<void> {
+    try {
+      const calService: CalibrationService = CalibrationService.getInstance();
+      // 收集所有 dayKey
+      const daySet: Set<string> = new Set<string>();
+      for (const seg of this.segments) {
+        if (seg.dayKey) daySet.add(seg.dayKey);
+      }
+      // 按天应用校准
+      for (const dk of daySet) {
+        await calService.applyCalibrations(this.segments, dk);
+      }
+      Logger.info(TAG, 'applyCalibrationsToAllSegments: %{public}d days processed', daySet.size);
+    } catch (e) {
+      Logger.error(TAG, 'applyCalibrationsToAllSegments failed: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /** 从其它页返回时刷新校准并重绘标记 */
+  async refreshCalibrationsAndRedraw(): Promise<void> {
+    try {
+      Logger.info(TAG, 'refreshCalibrationsAndRedraw start');
+      // 重新查询最新的段数据
+      this.segments = await this.dao.queryAllActivitySegments(200);
+      Logger.info(TAG, 'Re-queried %{public}d segments from DB', this.segments.length);
+      await this.applyCalibrationsToAllSegments();
+      // 重建日路线（段数据可能已变）
+      this.buildDayRoutes();
+      // 重绘标记
+      if (this.isMapReady && this.dayRoutes.length > 0) {
+        this.clearSegmentMarkers();
+        this.drawSegmentMarkers();
+        Logger.info(TAG, 'Markers redrawn after calibration refresh');
+      } else {
+        Logger.warn(TAG, 'Cannot redraw: mapReady=%{public}s routes=%{public}d',
+          this.isMapReady ? 'true' : 'false', this.dayRoutes.length);
+      }
+    } catch (e) {
+      Logger.error(TAG, 'refreshCalibrationsAndRedraw failed: %{public}s', JSON.stringify(e));
+    }
   }
 
   buildDayRoutes(): void {
@@ -469,6 +544,8 @@ export struct MapPage {
               if (name.length > 0) s.poiName = name;
             }
           }
+          // 合并校准记录，确保用户/AI修正不被覆盖
+          await CalibrationService.getInstance().applyCalibrations(segs, todayKey);
           await this.dao.deleteActivitySegmentsByDay(todayKey);
           await this.dao.insertActivitySegments(segs);
           Logger.info(TAG, 'Activity classify: %{public}d segments from %{public}d pts',
@@ -712,6 +789,7 @@ export struct MapPage {
       }
     }
     this.segMarkers = [];
+    this.segmentInfoMap = {};
   }
 
   /** 绘制当前选中天的 segment 标记（活动类型标记） */
@@ -732,7 +810,14 @@ export struct MapPage {
         ? (this.activityEmoji(seg.activityType) + ' ' + seg.poiName)
         : (this.activityEmoji(seg.activityType) + ' ' + (this.activityLabel(seg.activityType) || '未知活动'));
       const posKey: string = `${seg.latitude.toFixed(6)},${seg.longitude.toFixed(6)}`;
-      if (this.markerMap[posKey]) continue;
+      // 存储段校准信息（点击时传递给详情页）
+      this.segmentInfoMap[posKey] = {
+        segmentStartTime: seg.startTime,
+        segmentEndTime: seg.endTime,
+        dayKey: seg.dayKey,
+        activityTag: seg.activityType,
+        poiName: seg.poiName || ''
+      };
       const fpPlaceholder: Footprint = new Footprint();
       fpPlaceholder.latitude = seg.latitude;
       fpPlaceholder.longitude = seg.longitude;
@@ -796,12 +881,19 @@ export struct MapPage {
 
   goDetail(fp: Footprint): void {
     try {
+      // 查找该 footprint 对应的段校准信息
+      const posKey: string = `${fp.latitude.toFixed(6)},${fp.longitude.toFixed(6)}`;
+      const segInfo: SegmentCalibrationInfo | undefined = this.segmentInfoMap[posKey];
+
       router.pushUrl({
         url: 'pages/WaypointDetailPage',
         params: {
           poiName: fp.poiName, latitude: fp.latitude, longitude: fp.longitude,
           activityTag: fp.activityTag, timestamp: fp.timestamp,
-          stayDuration: fp.stayDuration, speed: fp.speed, photoList: fp.photoId
+          stayDuration: fp.stayDuration, speed: fp.speed, photoList: fp.photoId,
+          segmentStartTime: segInfo ? segInfo.segmentStartTime : 0,
+          segmentEndTime: segInfo ? segInfo.segmentEndTime : 0,
+          dayKey: segInfo ? segInfo.dayKey : ''
         }
       });
     } catch (e) {}
@@ -934,7 +1026,10 @@ export struct MapPage {
   switchTab(index: number): void {
     if (index === this.currentTab) return;
     this.currentTab = index;
-    if (index === 1) {
+    if (index === 0) {
+      // 切换回地图 tab 时刷新校准，确保其它页面的校准修改立即反映到地图标记上
+      this.refreshCalibrationsAndRedraw();
+    } else if (index === 1) {
       this.triggerClassify();
     } else if (index === 2) {
       // 切换到推荐 tab 时触发一次立即刷新
@@ -966,6 +1061,8 @@ export struct MapPage {
             if (name.length > 0) s.poiName = name;
           }
         }
+        // 合并校准记录，确保用户/AI修正不被覆盖
+        await CalibrationService.getInstance().applyCalibrations(segs, todayKey);
         await this.dao.deleteActivitySegmentsByDay(todayKey);
         await this.dao.insertActivitySegments(segs);
         Logger.info(TAG, 'Manual classify: %{public}d segments from %{public}d pts',

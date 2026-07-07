@@ -9,6 +9,9 @@ import { ActivitySegment } from '../model/ActivitySegment';
 import { Dao } from '../database/Dao';
 import { ActivityType, ACTIVITY_LABELS } from '../common/Constants';
 import { formatTimestamp, getDayKey } from '../common/LocationUtils';
+import { CalibrationService } from '../services/CalibrationService';
+import { SegmentCalibration } from '../model/SegmentCalibration';
+import { CalibrationSignal } from '../common/CalibrationSignal';
 
 const TAG = 'TimelinePage';
 
@@ -25,12 +28,32 @@ export struct TimelineContent {
   segments: ActivitySegment[] = [];
   @State days: DayGroup[] = [];
   @State isLoading: boolean = true;
+  @State calibratedStartTimes: Record<string, Set<number>> = {};  // dayKey -> set of calibrated startTimes
 
   private dao: Dao = Dao.getInstance();
+  private calService: CalibrationService = CalibrationService.getInstance();
+  private lastProcessedCalTs: number = 0;
+  private calPoller: number | null = null;
 
   aboutToAppear(): void {
     Logger.info(TAG, 'TimelinePage aboutToAppear');
     this.loadTimeline();
+    // 轮询校准变更信号，确保校准后时间线立即可见（不依赖页面切换）
+    this.calPoller = setInterval(() => {
+      const result = CalibrationSignal.consume(this.lastProcessedCalTs);
+      if (result.hasNew) {
+        this.lastProcessedCalTs = result.newTs;
+        Logger.info(TAG, 'Calibration signal detected, reloading timeline');
+        this.loadTimeline();
+      }
+    }, 2000);
+  }
+
+  aboutToDisappear(): void {
+    if (this.calPoller) {
+      clearInterval(this.calPoller);
+      this.calPoller = null;
+    }
   }
 
   async loadTimeline(): Promise<void> {
@@ -48,10 +71,25 @@ export struct TimelineContent {
       const allDays: Set<string> = new Set(dayKeys);
       for (const dk of Object.keys(segByDay)) { allDays.add(dk); }
 
+      // 加载校准信息并按天合并
+      const calMap: Record<string, Set<number>> = {};
       const groups: DayGroup[] = [];
       for (const dk of allDays) {
         const segs: ActivitySegment[] = segByDay[dk] || [];
+        // 对该天的段应用校准覆盖
+        await this.calService.applyCalibrations(segs, dk);
         const count: number = await this.dao.queryFootprintCountByDay(dk);
+
+        // 记录已校准的 startTime
+        const calSet: Set<number> = new Set<number>();
+        try {
+          const cals: SegmentCalibration[] = await this.calService.getCalibrationsByDay(dk);
+          for (const cal of cals) {
+            calSet.add(cal.segmentStartTime);
+          }
+        } catch (e) { /* ignore */ }
+        calMap[dk] = calSet;
+
         groups.push({
           dayKey: dk,
           label: this.formatDayLabel(dk),
@@ -60,6 +98,7 @@ export struct TimelineContent {
         });
       }
 
+      this.calibratedStartTimes = calMap;
       this.days = groups;
       this.isLoading = false;
       Logger.info(TAG, 'Timeline loaded: %{public}d days', groups.length);
@@ -79,6 +118,11 @@ export struct TimelineContent {
     const d: number = parseInt(dayKey.substring(6, 8));
     const wd: number = new Date(y, m, d).getDay();
     return `${month}月${day}日 周${weekdays[wd]}`;
+  }
+
+  isSegCalibrated(dayKey: string, startTime: number): boolean {
+    const calSet: Set<number> | undefined = this.calibratedStartTimes[dayKey];
+    return calSet ? calSet.has(startTime) : false;
   }
 
   getActivityEmoji(type: string): string {
@@ -160,6 +204,11 @@ export struct TimelineContent {
                             .padding({ left: 6, right: 6, top: 1, bottom: 1 })
                             .backgroundColor('#EBF3FF').borderRadius(4)
 
+                          // 校准标记
+                          if (this.isSegCalibrated(dayGroup.dayKey, seg.startTime)) {
+                            Text('✅').fontSize(10).margin({ left: 4 })
+                          }
+
                           Text(` ${formatTimestamp(seg.startTime)} - ${formatTimestamp(seg.endTime)}`)
                             .fontSize(12).fontColor('#999').margin({ left: 6 })
 
@@ -176,6 +225,8 @@ export struct TimelineContent {
                     .alignItems(VerticalAlign.Center)
                     .border({ width: { bottom: 0.5 }, color: '#F0F0F0' })
                     .onClick(() => {
+                      const calSet: Set<number> | undefined = this.calibratedStartTimes[dayGroup.dayKey];
+                      const isCal: boolean = calSet ? calSet.has(seg.startTime) : false;
                       router.pushUrl({
                         url: 'pages/WaypointDetailPage',
                         params: {
@@ -186,7 +237,10 @@ export struct TimelineContent {
                           timestamp: seg.startTime,
                           stayDuration: seg.endTime - seg.startTime,
                           speed: 0,
-                          photoList: ''
+                          photoList: '',
+                          segmentStartTime: seg.startTime,
+                          segmentEndTime: seg.endTime,
+                          dayKey: seg.dayKey
                         }
                       });
                     })

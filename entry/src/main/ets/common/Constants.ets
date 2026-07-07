@@ -11,6 +11,7 @@ export const TABLE_FOOTPRINT: string = 'footprint';
 export const TABLE_ACTIVITY_SEGMENT: string = 'activity_segment';
 export const TABLE_USER_PROFILE: string = 'user_profile';
 export const TABLE_RECOMMENDATION: string = 'recommendation';
+export const TABLE_SEGMENT_CALIBRATION: string = 'segment_calibration';
 
 // ========== 定位参数 ==========
 /** 最小定位间隔 (秒) */
@@ -52,6 +53,12 @@ export enum DataSource {
   GPS = 'gps',
   PHOTO = 'photo',
   MANUAL = 'manual'
+}
+
+// ========== 校准来源 ==========
+export enum CalibrationSource {
+  MANUAL = 'manual',
+  AI_AGENT = 'ai_agent'
 }
 
 // ========== 高德地图 API Key ==========

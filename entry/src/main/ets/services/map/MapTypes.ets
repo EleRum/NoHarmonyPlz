@@ -76,6 +76,7 @@ export interface PoiResult {
   address: string;
   distance: number;
   tel: string;
+  id?: string;  // Amap POI ID，用于获取照片等详情
 }
 
 /** 逆地理编码结果 */

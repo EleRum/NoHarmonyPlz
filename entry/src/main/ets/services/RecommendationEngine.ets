@@ -15,9 +15,12 @@ import { PlatformBridge } from '../platform/PlatformBridge';
 import { HttpResponse } from '../platform/network/INetworkProvider';
 import { WebRecommendationService, WebPlaceResult } from './WebRecommendationService';
 import { nameSimilarity } from './WebSearchParser';
+import { nameSimilarity } from './WebSearchParser';
+import { ClaudeService, ClaudeReply } from './ClaudeService';
 
 const TAG = 'RecommendationEngine';
-const SEARCH_RADIUS: number = 1000; // 搜索半径 1km
+const SEARCH_RADII: number[] = [1000, 2000, 5000]; // 渐进半径：1km → 2km → 5km
+const MIN_RECS: number = 10;                        // 最少推荐数
 
 interface UserPref {
   diningWeights: Record<string, number>;  // 餐饮类型权重
@@ -51,7 +54,9 @@ interface MergedPlace {
   longitude: number;
   address: string;
   distance: number;
-  enrichment: WebPlaceResult | null;    // Web 富数据（评分/评论/推荐菜）
+  enrichment: WebPlaceResult | null;
+  poiId: string;
+  photoUrl: string;  // Amap 返回的第一张照片 URL（来自 place/around 的 photos[0].url）
 }
 
 // 餐饮关键词 → 搜索 query
@@ -65,11 +70,17 @@ const DINING_QUERIES: Array<[string[], string]> = [
   [['茶', '奶茶', '甜品'], '奶茶甜品'],
 ];
 
+// 硬编码兜底（AI 不可用时使用）
+const FALLBACK_QUERIES: string[] = [
+  '火锅 川菜 餐厅', '咖啡 奶茶 甜品', '购物中心 商场', '公园 景点 影院', '健身房 运动'
+];
+
 export class RecommendationEngine {
   private context: common.Context | null = null;
   private dao: Dao;
   private prefCache: UserPref | null = null;
   private webService: WebRecommendationService;
+  private resultCache: Recommendation[] | null = null;  // 上次成功结果缓存
 
   constructor(dao: Dao) {
     this.dao = dao;
@@ -81,166 +92,275 @@ export class RecommendationEngine {
   }
 
   /**
-   * 主入口：根据当下情境生成推荐
-   * @param doWebSearch 是否执行 Web 搜索（大众点评/美团），隔轮执行以控制频率
+   * 主入口：AI 生成搜索意图 + 渐进半径多类别搜索 → 确保 ≥10 条推荐，20-30% 非餐饮
    */
   async generateNow(contextType: string, lat: number, lng: number, doWebSearch: boolean = false): Promise<Recommendation[]> {
     const pref: UserPref = await this.getPreferences();
     const hour: number = new Date().getHours();
     const day: number = new Date().getDay();
-
-    // ── 根据时段确定搜索意图 ──
-    let query: string = '';
-    let placeType: string = '';
-
-    if (hour >= 7 && hour < 10) {
-      query = '早餐 面馆 咖啡';
-      placeType = 'dining';
-    } else if (hour >= 11 && hour < 14) {
-      query = this.pickDiningQuery(pref);
-      placeType = 'dining';
-    } else if (hour >= 14 && hour < 17) {
-      query = '咖啡馆 甜品 下午茶';
-      placeType = 'dining';
-    } else if (hour >= 17 && hour < 21) {
-      query = this.pickDiningQuery(pref);
-      placeType = 'dining';
-    } else if ((day === 0 || day === 6) && hour >= 8 && hour < 18) {
-      query = '公园 景点 商圈';
-      placeType = 'leisure';
-    } else {
-      query = this.pickDiningQuery(pref);
-      placeType = 'dining';
-    }
-
-    // ── 并行多源搜索 ──
     const cityName: string = await this.cityFromCoords(lat, lng);
-    const broadQuery: string = this.pickFallbackQuery(placeType, hour, day);
 
-    // 同时搜：精确关键词 + 宽泛关键词 + Web（可选）
-    const searchPromises: Promise<PoiResult[] | WebPlaceResult[] | PoiResult[]>[] = [
-      this.safeAmapHttpSearch(query, lat, lng),
-      this.safeAmapHttpSearch(broadQuery, lat, lng),
-      doWebSearch
-        ? this.webService.searchAll(query, cityName.length > 0 ? cityName : '附近', lat, lng).catch((): WebPlaceResult[] => [])
-        : Promise.resolve([] as WebPlaceResult[])
-    ];
-    const searchResults: (PoiResult[] | WebPlaceResult[] | PoiResult[])[] = await Promise.all(searchPromises);
-    const amapPois: PoiResult[] = searchResults[0] as PoiResult[];
-    const broadPois: PoiResult[] = searchResults[1] as PoiResult[];
-    const webPlaces: WebPlaceResult[] = searchResults[2] as WebPlaceResult[];
+    // ── 1) AI 生成搜索意图（硬编码兜底）──
+    const aiQueries: string[] = await this.getAiSearchQueries(hour, day, pref, cityName);
 
-    Logger.info(TAG, 'Amap(exact): %{public}d, Amap(broad): %{public}d, Web: %{public}d',
-      amapPois.length, broadPois.length, webPlaces.length);
+    // ── 2) 渐进半径搜索（跟踪每个查询的结果，用于交错混合）──
+    // queryGroups[query] = 来自该查询的合并结果
+    const queryGroups: Record<string, MergedPlace[]> = {};
+    for (const q of aiQueries) { queryGroups[q] = []; }
 
-    // ── 合并去重（精确 Amap + 宽泛 Amap + Web）──
-    const allPois: PoiResult[] = this.dedupPoiResults(amapPois.concat(broadPois));
-    const merged: MergedPlace[] = this.mergeResults(allPois, webPlaces);
+    for (const radius of SEARCH_RADII) {
+      let totalCount = 0;
+      for (const q of aiQueries) { totalCount += queryGroups[q].length; }
+      if (totalCount >= MIN_RECS) break;
 
-    if (merged.length > 0) {
-      return this.rankAndWrapMerged(merged, pref, placeType, contextType, lat, lng);
+      const batchPromises: Promise<PoiResult[]>[] = [];
+      for (const q of aiQueries) {
+        batchPromises.push(this.amapSearchRadius(q, lat, lng, radius));
+      }
+
+      const batchResults: PoiResult[][] = await Promise.all(batchPromises);
+
+      for (let qi = 0; qi < aiQueries.length; qi++) {
+        const newPois: MergedPlace[] = this.mergeResults(
+          this.dedupPoiResults(batchResults[qi]), []);
+        // 去重后加入对应查询的分组
+        const existing: MergedPlace[] = queryGroups[aiQueries[qi]];
+        for (const np of newPois) {
+          let dup = false;
+          for (const ex of existing) { if (ex.placeName === np.placeName) { dup = true; break; } }
+          if (!dup) existing.push(np);
+        }
+        queryGroups[aiQueries[qi]] = existing;
+      }
+
+      Logger.info(TAG, 'Radius %{public}dm results:', radius);
+      for (const q of aiQueries) {
+        Logger.info(TAG, '  [%{public}s]: %{public}d', q, queryGroups[q].length);
+      }
     }
 
-    // 最终降级：从历史活动智能推荐
-    const historyRecs: Recommendation[] = await this.fallbackRecs(placeType, contextType, pref, lat, lng);
-    if (historyRecs.length > 0) {
-      return historyRecs;
+    // Web 搜索（异步补充）
+    const webPlaces: WebPlaceResult[] = doWebSearch
+      ? await this.webService.searchAll(aiQueries.join(' '), cityName || '附近', lat, lng).catch(() => [] as WebPlaceResult[])
+      : [];
+
+    // ── 3) 交错混合：从每个查询轮流取结果，保证类别多样性 ──
+    const interleaved: MergedPlace[] = [];
+    let maxQLen = 0;
+    for (const q of aiQueries) { if (queryGroups[q].length > maxQLen) maxQLen = queryGroups[q].length; }
+
+    for (let round = 0; round < maxQLen && interleaved.length < MIN_RECS; round++) {
+      for (const q of aiQueries) {
+        if (round < queryGroups[q].length && interleaved.length < MIN_RECS) {
+          interleaved.push(queryGroups[q][round]);
+        }
+      }
     }
 
-    // 终极兜底：无关键词搜索附近任意 POI
-    Logger.info(TAG, 'All searches empty — trying keyword-less nearby discovery');
-    const anyPois: PoiResult[] = await this.safeAmapHttpSearch('', lat, lng);
-    if (anyPois.length > 0) {
-      return this.rankAndWrap(anyPois, pref, placeType, contextType, lat, lng);
+    // 合并 Web 结果（去重追加）
+    for (const wp of webPlaces) {
+      if (!wp.name || wp.name.length < 2) continue;
+      let dup = false;
+      for (const im of interleaved) { if (im.placeName === wp.name) { dup = true; break; } }
+      if (!dup) {
+        interleaved.push({
+          placeName: wp.name, placeType: '', latitude: wp.latitude, longitude: wp.longitude,
+          address: wp.address, distance: 0, enrichment: wp, poiId: '', photoUrl: ''
+        });
+      }
     }
+
+    const allMerged: MergedPlace[] = interleaved;
+    Logger.info(TAG, 'Interleaved: %{public}d from %{public}d queries + %{public}d web (target ≥%{public}d)',
+      allMerged.length, aiQueries.length, webPlaces.length, MIN_RECS);
+
+    if (allMerged.length > 0) {
+      let mixed: Recommendation[] = await this.rankAndWrapMerged(allMerged, pref, contextType, lat, lng);
+      // 数量不足时混合同城历史补齐，避免单独一页全是"你曾去过"
+      if (mixed.length < MIN_RECS) {
+        const historyRecs: Recommendation[] = await this.fallbackRecs(cityName, contextType, pref, lat, lng);
+        for (const hr of historyRecs) {
+          if (mixed.length >= MIN_RECS) break;
+          let dup = false;
+          for (const mr of mixed) { if (mr.placeName === hr.placeName) { dup = true; break; } }
+          if (!dup) mixed.push(hr);
+        }
+      }
+      this.resultCache = mixed;
+      return mixed;
+    }
+
+    // ── 3) 扩大搜索：无关键词搜附近 POI（优先于历史）──
+    for (const radius of SEARCH_RADII) {
+      const anyPois: PoiResult[] = await this.amapSearchRadius('', lat, lng, radius);
+      if (anyPois.length >= MIN_RECS) {
+        const recs: Recommendation[] = this.rankAndWrap(anyPois, pref, contextType, lat, lng);
+        this.resultCache = recs;
+        return recs;
+      }
+    }
+
+    // ── 4) 缓存兜底：API 暂时失败时复用上次结果，不回退到历史 ──
+    if (this.resultCache && this.resultCache.length > 0) {
+      Logger.info(TAG, 'All searches empty — reusing cached %{public}d results', this.resultCache.length);
+      return this.resultCache;
+    }
+
+    // ── 5) 最后手段：同城历史（最多 3 条）──
+    const historyRecs: Recommendation[] = await this.fallbackRecs(cityName, contextType, pref, lat, lng);
+    if (historyRecs.length > 0) return historyRecs.slice(0, 3);
 
     return [];
   }
 
-  /** 直接 HTTP 调 Amap REST API（不依赖 WebView/JS 桥） */
-  private async safeAmapHttpSearch(query: string, lat: number, lng: number): Promise<PoiResult[]> {
+  /** 对指定半径执行 Amap 搜索 */
+  private async amapSearchRadius(query: string, lat: number, lng: number, radius: number): Promise<PoiResult[]> {
     try {
       const bridge: PlatformBridge = PlatformBridge.getInstance();
       const apiKey: string = 'bb0c1640992e6c7f2b1467498d8ae848';
       const url: string =
-        `https://restapi.amap.com/v3/place/around?key=${apiKey}&location=${lng},${lat}&radius=${SEARCH_RADIUS}&keywords=${encodeURIComponent(query)}&offset=20&page=1`;
-
-      Logger.info(TAG, 'nearbySearch(HTTP): url=%{public}s', url);
-      const resp: HttpResponse = await bridge.network.request(
-        url, { method: 'GET', connectTimeout: 5000, readTimeout: 8000 }
-      );
-
-      Logger.info(TAG, 'nearbySearch(HTTP): responseCode=%{public}d', resp.responseCode);
-      if (resp.responseCode !== 200) {
-        return [];
-      }
-
-      const json: string = resp.result;
-      if (json.length < 20) {
-        Logger.warn(TAG, 'nearbySearch(HTTP): response too short');
-        return [];
-      }
-
-      // 简单解析：按 "name":"xxx","location":"lng,lat" 配对提取
-      const results: PoiResult[] = [];
-      const nameRegex: RegExp = new RegExp('"name"\\s*:\\s*"([^"]*)"', 'g');
-      const locRegex: RegExp = new RegExp('"location"\\s*:\\s*"([^"]*)"', 'g');
-      const typeRegex: RegExp = new RegExp('"type"\\s*:\\s*"([^"]*)"', 'g');
-      const addrRegex: RegExp = new RegExp('"address"\\s*:\\s*"([^"]*)"', 'g');
-      const distRegex: RegExp = new RegExp('"distance"\\s*:\\s*"([^"]*)"', 'g');
-
-      // 收集所有字段
-      const names: string[] = [];
-      const locs: string[] = [];
-      const types: string[] = [];
-      const addrs: string[] = [];
-      const dists: string[] = [];
-
-      let m: RegExpExecArray | null = nameRegex.exec(json);
-      while (m) { names.push(m[1]); m = nameRegex.exec(json); }
-
-      m = locRegex.exec(json);
-      while (m) { locs.push(m[1]); m = locRegex.exec(json); }
-
-      m = typeRegex.exec(json);
-      while (m) { types.push(m[1]); m = typeRegex.exec(json); }
-
-      m = addrRegex.exec(json);
-      while (m) { addrs.push(m[1]); m = addrRegex.exec(json); }
-
-      m = distRegex.exec(json);
-      while (m) { dists.push(m[1]); m = distRegex.exec(json); }
-
-      // 按 name 数量合并（name 必须存在，其余可选）
-      const count: number = names.length;
-      for (let i: number = 0; i < count; i++) {
-        let poiLat: number = 0;
-        let poiLng: number = 0;
-        if (i < locs.length) {
-          const parts: string[] = locs[i].split(',');
-          if (parts.length === 2) {
-            poiLng = parseFloat(parts[0]);
-            poiLat = parseFloat(parts[1]);
-          }
-        }
-        const distVal: number = i < dists.length ? parseInt(dists[i]) : 0;
-        results.push({
-          name: names[i],
-          type: i < types.length ? types[i] : '',
-          latitude: poiLat,
-          longitude: poiLng,
-          address: i < addrs.length ? addrs[i] : '',
-          distance: isNaN(distVal) ? 0 : distVal,
-          tel: ''
-        } as PoiResult);
-      }
-
-      Logger.info(TAG, 'nearbySearch(HTTP): %{public}d results', results.length);
-      return results;
+        `https://restapi.amap.com/v3/place/around?key=${apiKey}&location=${lng},${lat}&radius=${radius}&keywords=${encodeURIComponent(query)}&offset=20&page=1`;
+      const resp: HttpResponse = await bridge.network.request(url,
+        { method: 'GET', connectTimeout: 5000, readTimeout: 8000 });
+      if (resp.responseCode !== 200 || resp.result.length < 20) return [];
+      return this.parseAmapJson(resp.result);
     } catch (e) {
-      Logger.warn(TAG, 'nearbySearch HTTP failed: %{public}s', JSON.stringify(e));
+      return [];
     }
-    return [];
+  }
+
+  /** AI 生成搜索关键词 — AI 自由决定类别和比例，无硬编码限制 */
+  private async getAiSearchQueries(hour: number, day: number, pref: UserPref, city: string): Promise<string[]> {
+    try {
+      const claude: ClaudeService = new ClaudeService();
+      claude.loadApiKey();
+      const timeLabel: string = hour < 10 ? '早上' : hour < 14 ? '中午' : hour < 17 ? '下午' : hour < 21 ? '晚上' : '深夜';
+      const weekLabel: string = (day === 0 || day === 6) ? '周末' : '工作日';
+      const topTypes: string = pref.topPoiTypes.slice(0, 3).join('、');
+      const prompt: string = `用户在${city || '当前城市'}，${weekLabel}${timeLabel}${hour}点。
+用户近期去过：${topTypes || '未知'}。
+
+生成 5 个高德地图POI搜索关键词，用逗号分隔。
+要求：必须覆盖至少 2 种不同类别（餐饮+休闲、或购物+运动+餐饮等），不能全是同一类。
+根据时间和情境合理分配：早上偏早餐咖啡，中午偏午餐，下午偏休闲购物，晚上偏晚餐娱乐，深夜偏宵夜。
+格式示例：川菜,购物中心,咖啡馆,电影院,火锅
+只返回逗号分隔的关键词。`;
+
+      const reply: ClaudeReply = await claude.chatSimple(prompt);
+      if (reply.text.length > 0) {
+        // 先按逗号分隔，如果只有1个再按空格分（AI 可能不按逗号返回）
+        let queries: string[] = reply.text.split(/[,，、\n]/).map((s: string) => s.trim()).filter((s: string) => s.length >= 2);
+        if (queries.length < 3) {
+          queries = reply.text.split(/\s+/).map((s: string) => s.trim()).filter((s: string) => s.length >= 2);
+        }
+        if (queries.length >= 3) {
+          Logger.info(TAG, 'AI queries (%{public}d): %{public}s', queries.length, queries.join(', '));
+          return queries.slice(0, 5);
+        }
+      }
+    } catch (e) {
+      Logger.warn(TAG, 'AI query generation failed, using fallback');
+    }
+    return FALLBACK_QUERIES;
+  }
+
+  // 非目的地 POI 黑名单（快递/设施/交通节点 等不应被推荐）
+  private static readonly POI_BLACKLIST: string[] = [
+    '快递', '驿站', '停车场', '停车', '厕所', '洗手间', '卫生间',
+    '配电', '变电', '垃圾', '收费站', '岗亭', '公交站', '地铁站',
+    '加油站', '充电站', '维修', '洗车', 'ATM', '银行', '药店',
+    '社区', '街道', '居委会', '警务', '消防', '邮局', '移动',
+    '联通', '电信', '营业厅', '服务区', '收费站'
+  ];
+
+  /** 过滤非目的地 POI */
+  private isDestinationPoi(name: string): boolean {
+    if (!name || name.length < 2) return false;
+    for (const kw of RecommendationEngine.POI_BLACKLIST) {
+      if (name.includes(kw)) return false;
+    }
+    return true;
+  }
+
+  /** 解析 Amap JSON 响应为 PoiResult[]，过滤快递驿站等非目的地，同时提取 POI ID */
+  private parseAmapJson(json: string): PoiResult[] {
+    const results: PoiResult[] = [];
+    const nameRegex: RegExp = new RegExp('"name"\\s*:\\s*"([^"]*)"', 'g');
+    const locRegex: RegExp = new RegExp('"location"\\s*:\\s*"([^"]*)"', 'g');
+    const typeRegex: RegExp = new RegExp('"type"\\s*:\\s*"([^"]*)"', 'g');
+    const addrRegex: RegExp = new RegExp('"address"\\s*:\\s*"([^"]*)"', 'g');
+    const distRegex: RegExp = new RegExp('"distance"\\s*:\\s*"([^"]*)"', 'g');
+    const names: string[] = []; const locs: string[] = []; const types: string[] = [];
+    const addrs: string[] = []; const dists: string[] = [];
+    let m: RegExpExecArray | null = nameRegex.exec(json);
+    while (m) { names.push(m[1]); m = nameRegex.exec(json); }
+    m = locRegex.exec(json); while (m) { locs.push(m[1]); m = locRegex.exec(json); }
+    m = typeRegex.exec(json); while (m) { types.push(m[1]); m = typeRegex.exec(json); }
+    m = addrRegex.exec(json); while (m) { addrs.push(m[1]); m = addrRegex.exec(json); }
+    m = distRegex.exec(json); while (m) { dists.push(m[1]); m = distRegex.exec(json); }
+    // 提取每个 POI 的第一张照片：找 "photos":[ 后的第一个 "url"，空数组则记空
+    const firstPhotoUrls: string[] = [];
+    let searchFrom = 0;
+    while (true) {
+      const photosIdx: number = json.indexOf('"photos":', searchFrom);
+      if (photosIdx < 0) break;
+      // 检查是否是空数组 "photos":[]
+      const afterPhotos: string = json.substring(photosIdx + 9, photosIdx + 13).trim();
+      if (afterPhotos.startsWith('[]')) {
+        firstPhotoUrls.push('');  // 空照片
+        searchFrom = photosIdx + 12;
+        continue;
+      }
+      const urlIdx: number = json.indexOf('"url":"http', photosIdx + 9);
+      if (urlIdx < 0) { firstPhotoUrls.push(''); searchFrom = photosIdx + 12; continue; }
+      const urlStart: number = urlIdx + 7;
+      const urlEnd: number = json.indexOf('"', urlStart);
+      if (urlEnd < 0) break;
+      firstPhotoUrls.push(json.substring(urlStart, urlEnd));
+      searchFrom = urlEnd + 1;
+    }
+    for (let i = 0; i < names.length; i++) {
+      let poiLat = 0; let poiLng = 0;
+      if (i < locs.length) { const parts = locs[i].split(','); if (parts.length === 2) { poiLng = parseFloat(parts[0]); poiLat = parseFloat(parts[1]); } }
+      if (this.isDestinationPoi(names[i])) {
+        // 使用 i 索引匹配 photo（firstPhotoUrls 与 names 一一对应，按原始 POI 顺序）
+        const photoUrl: string = i < firstPhotoUrls.length ? firstPhotoUrls[i] : '';
+        results.push({ name: names[i], type: i < types.length ? types[i] : '', latitude: poiLat, longitude: poiLng, address: i < addrs.length ? addrs[i] : '', distance: i < dists.length ? parseInt(dists[i]) : 0, tel: '', id: photoUrl } as PoiResult);
+      }
+    }
+    return results;
+  }
+
+  /** 根据 POI 名生成 Unsplash 搜索词 */
+  private photoQuery(name: string, placeType: string): string {
+    const m: Record<string, string> = {
+      'dining':'restaurant food', 'shopping':'shopping mall', 'sports':'gym fitness',
+      'leisure':'park nature', 'travel':'travel scenery', 'work':'office building',
+      'home':'home cozy', 'commute':'city street'
+    };
+    let base: string = m[placeType] || 'city life';
+    // 加店名前 2 个字增加相关性
+    if (name.length >= 2) base = name.substring(0, 2) + ' ' + base;
+    return base;
+  }
+
+  /** 合并结果去重（按名称） */
+  private dedupMerged(places: MergedPlace[]): MergedPlace[] {
+    const seen: string[] = [];
+    const result: MergedPlace[] = [];
+    for (const p of places) {
+      const key: string = p.placeName || '';
+      if (key.length === 0) continue;
+      let dup = false;
+      for (const s of seen) { if (s === key) { dup = true; break; } }
+      if (!dup) { seen.push(key); result.push(p); }
+    }
+    return result;
+  }
+
+  /** 兼容旧接口，委托给新方法 */
+  private async safeAmapHttpSearch(query: string, lat: number, lng: number): Promise<PoiResult[]> {
+    return this.amapSearchRadius(query, lat, lng, SEARCH_RADII[0]);
   }
 
   /** 反地理编码获取城市名（直接 HTTP 调用 Amap REST API，不依赖 WebView） */
@@ -325,7 +445,9 @@ export class RecommendationEngine {
         longitude: p.longitude,
         address: p.address || '',
         distance: p.distance || 0,
-        enrichment: enrichment
+        enrichment: enrichment,
+        poiId: '',
+        photoUrl: p.id || ''   // p.id 现在存储第一个照片 URL（从 parseAmapJson）
       });
     }
 
@@ -341,7 +463,9 @@ export class RecommendationEngine {
         longitude: w.longitude,
         address: w.address,
         distance: 0,
-        enrichment: w
+        enrichment: w,
+        poiId: '',
+        photoUrl: ''
       });
     }
 
@@ -349,9 +473,9 @@ export class RecommendationEngine {
   }
 
   /** 合并结果打分排序 */
-  private rankAndWrapMerged(places: MergedPlace[], pref: UserPref,
-                             placeType: string, contextType: string,
-                             lat: number, lng: number): Recommendation[] {
+  private async rankAndWrapMerged(places: MergedPlace[], pref: UserPref,
+                                   placeType: string, contextType: string,
+                                   lat: number, lng: number): Promise<Recommendation[]> {
     const results: Recommendation[] = [];
     const scoreMap: Record<string, number> = {};
 
@@ -370,7 +494,7 @@ export class RecommendationEngine {
       score = Math.min(1.0, Math.max(0, score));
       scoreMap[p.placeName] = score;
 
-      const r: Recommendation = this.makeRec(p.placeName, placeType, contextType, siteLat, siteLng, distVal, score);
+      const r: Recommendation = this.makeRec(p.placeName, p.placeType || 'dining', contextType, siteLat, siteLng, distVal, score);
 
       // 附加 Web 富数据
       if (p.enrichment) {
@@ -395,28 +519,91 @@ export class RecommendationEngine {
       return sb - sa;
     });
 
-    return results.slice(0, 8).map(r => {
-      const sc: number = scoreMap[r.placeName] ?? 0;
-      // 丰富化 reason
+    // AI 搜索词已自然决定类别比例，直接取 top 结果，确保 ≥10 条
+    let mixed: Recommendation[] = results.slice(0, Math.min(results.length, MIN_RECS + 5));
+
+    // 轻度洗牌：打破每次刷新完全相同的顺序（相同位置相同查询的结果不变，但顺序微调）
+    for (let i = mixed.length - 1; i > 0; i--) {
+      const j: number = Math.floor(Math.random() * Math.min(4, i + 1));
+      if (i !== j) { const tmp: Recommendation = mixed[i]; mixed[i] = mixed[j]; mixed[j] = tmp; }
+    }
+    mixed = mixed.slice(0, MIN_RECS);
+
+    // 从 Amap place/around 响应中直接提取的照片 URL（已存储在各 POI 中）
+    for (let i = 0; i < mixed.length; i++) {
+      const r: Recommendation = mixed[i];
+      const photoUrl: string = places[i] ? places[i].photoUrl : '';
+      if (photoUrl) {
+        try {
+          const ej: Record<string, Object> = r.enrichmentJson.length > 0
+            ? JSON.parse(r.enrichmentJson) as Record<string, Object> : {};
+          ej['photoUrl'] = photoUrl;
+          r.enrichmentJson = JSON.stringify(ej);
+        } catch (e) { /* ignore */ }
+      }
+    }
+
+    // 先用富数据生成初始理由
+    for (const r of mixed) {
       if (r.enrichmentJson.length > 0) {
         try {
-          const ej: EnrichmentData = JSON.parse(r.enrichmentJson) as EnrichmentData;
-          const rating: number = ej.rating || 0;
-          const source: string = ej.source || '';
-          const popularItems: string = ej.popularItems || '';
-          const sourceLabel: string = source === 'dianping' ? '大众点评' : source === 'meituan' ? '美团' : '网页';
-          let reason: string = '';
-          if (rating > 0) reason += `${sourceLabel}评分${rating.toFixed(1)}`;
-          if (popularItems.length > 0) reason += ` · 推荐：${popularItems}`;
-          r.reason = reason.length > 0 ? reason : (sc > 0.5 ? '根据你的口味偏好推荐' : '附近热门选择');
-        } catch (e) {
-          r.reason = sc > 0.5 ? '根据你的口味偏好推荐' : '附近热门选择';
-        }
-      } else {
-        r.reason = sc > 0.5 ? '根据你的口味偏好推荐' : '附近热门选择';
+          const ej: Record<string, Object> = JSON.parse(r.enrichmentJson) as Record<string, Object>;
+          const rating: number = (ej['rating'] as number) || 0;
+          const source: string = (ej['source'] as string) || '';
+          const items: string = (ej['popularItems'] as string) || '';
+          const sourceLabel: string = source === 'dianping' ? '大众点评' : source === 'meituan' ? '美团' : '';
+          if (rating > 0) r.reason = `${sourceLabel}${rating.toFixed(1)}分`;
+          if (items.length > 0) r.reason += ` · ${items}`;
+        } catch (e) { /* ignore */ }
       }
-      return r;
-    });
+      // 兜底：无富数据时用关键词描述
+      if (!r.reason || r.reason.length === 0) {
+        r.reason = this.generateDescription(r.placeName, r.placeType);
+      }
+    }
+
+    // AI 批量生成推荐理由（覆盖上述初始理由，AI 不可用时保留初始值）
+    await this.enrichAiReasons(mixed);
+
+    // 最终确保每条都有理由
+    for (const r of mixed) {
+      if (!r.reason || r.reason.length === 0) {
+        r.reason = '值得一去的好地方';
+      }
+    }
+    return mixed;
+  }
+
+  /** AI 批量生成推荐理由（异步，不阻塞主流程） */
+  private async enrichAiReasons(recs: Recommendation[]): Promise<void> {
+    try {
+      const claude: ClaudeService = new ClaudeService();
+      claude.loadApiKey();
+      if (recs.length === 0) return;
+
+      // 构建地点列表
+      let placeList: string = '';
+      for (let i = 0; i < recs.length; i++) {
+        placeList += `${i + 1}. ${recs[i].placeName}（${recs[i].placeType || '未知类型'}）\n`;
+      }
+
+      const prompt: string = `附近地点：\n${placeList}\n为每个地点写一句推荐语（≤15字），要有画面感、让人想去。用换行分隔。\n示例：\n- 周末遛娃圣地，草坪超大\n- 深夜撸串喝啤酒超爽\n- 隐秘宝藏咖啡馆`;
+
+      const reply: ClaudeReply = await claude.chatSimple(prompt);
+      if (reply.text.length > 0) {
+        const lines: string[] = reply.text.split('\n').filter((s: string) => s.trim().length >= 3);
+        for (let i = 0; i < Math.min(lines.length, recs.length); i++) {
+          // 去掉序号前缀 "1. " 或 "1、"
+          const clean: string = lines[i].replace(/^\d+[.、)\s]+/, '').trim();
+          if (clean.length > 0) {
+            recs[i].reason = clean;
+          }
+        }
+        Logger.info(TAG, 'AI reasons enriched: %{public}d', Math.min(lines.length, recs.length));
+      }
+    } catch (e) {
+      // AI 失败不阻塞，保留原有 reason
+    }
   }
 
   // 给搜索结果打分排序
@@ -432,107 +619,75 @@ export class RecommendationEngine {
       const distVal: number = p.distance || 0;
       const score: number = this.scorePlace(p.name, pref, distVal);
       scoreMap[p.name] = score;
-      results.push(this.makeRec(p.name, placeType, contextType, siteLat, siteLng, distVal, score));
+      results.push(this.makeRec(p.name, p.type || 'dining', contextType, siteLat, siteLng, distVal, score));
     }
     results.sort((a, b) => {
       const sa: number = scoreMap[a.placeName] ?? 0;
       const sb: number = scoreMap[b.placeName] ?? 0;
       return sb - sa;
     });
-    return results.slice(0, 8).map(r => {
+    return results.slice(0, MIN_RECS).map(r => {
       const sc: number = scoreMap[r.placeName] ?? 0;
-      r.reason = sc > 0.5 ? '根据你的口味偏好推荐' : '附近热门选择';
+      r.reason = sc > 0.5 ? '附近热门选择' : '周边发现';
       return r;
     });
   }
 
-  // 最终降级：从用户历史 ActivitySegment 中智能提取推荐
-  private async fallbackRecs(placeType: string, context: string, pref: UserPref,
+  // 同城历史降级：仅推荐同城（< 30km）的历史活动，最多 6 条
+  private async fallbackRecs(cityName: string, context: string, pref: UserPref,
                              lat: number, lng: number): Promise<Recommendation[]> {
     try {
-      // 不允许作为推荐的活动类型
       const BLOCKED_TYPES: string[] = ['work', 'commute', 'home'];
-
-      // 获取最近 14 天的活动片段
       const fourteenDaysAgo: number = Date.now() - 14 * 24 * 60 * 60 * 1000;
       const allSegments: ActivitySegment[] = await this.dao.queryAllActivitySegments(200);
-      const validSegments: ActivitySegment[] = allSegments.filter(
-        seg => seg.endTime > fourteenDaysAgo
-          && seg.activityType && seg.activityType.length > 0
-          && !BLOCKED_TYPES.includes(seg.activityType)
+
+      // 过滤：14 天内 + 非屏蔽类型 + 同城（< 30km）
+      const SAME_CITY_RADIUS: number = 30000;
+      const validSegments: ActivitySegment[] = allSegments.filter(seg =>
+        seg.endTime > fourteenDaysAgo
+        && seg.activityType && seg.activityType.length > 0
+        && !BLOCKED_TYPES.includes(seg.activityType)
+        && this.calculateDistance(lat, lng, seg.latitude, seg.longitude) < SAME_CITY_RADIUS
       );
 
       if (validSegments.length === 0) {
-        Logger.warn(TAG, 'No valid history segments (filtered work/commute/home)');
+        Logger.warn(TAG, 'No same-city history segments');
         return [];
       }
 
-      // 打分所有有效 segment（不加类型限制），但匹配当前时段的加分
+      // 打分
       const scoredSegments: ScoredSegment[] = [];
       for (const seg of validSegments) {
-        let score: number = 0.3; // 基础分
-
-        // 1. 类型匹配当前时段 → 大幅加分
-        if (seg.activityType === placeType) {
-          score += 0.3;
-        } else if (seg.activityType === 'dining') {
-          score += 0.2;
-        } else if (seg.activityType === 'shopping') {
-          score += 0.15;
-        } else if (seg.activityType === 'leisure' || seg.activityType === 'travel') {
-          score += 0.1;
-        }
-
-        // 2. 有 POI 名称 → 加分
-        if (seg.poiName && seg.poiName.length > 1) {
-          score += 0.15;
-        }
-
-        // 3. 距离扣分
+        let score: number = 0.3;
+        if (seg.poiName && seg.poiName.length > 1) score += 0.2;
         const distance: number = this.calculateDistance(lat, lng, seg.latitude, seg.longitude);
-        if (distance > 50000) {
-          score *= 0.2;
-        } else if (distance > 20000) {
-          score *= 0.3;
-        } else if (distance > 10000) {
-          score *= 0.5;
-        } else if (distance > 5000) {
-          score *= 0.7;
-        }
-
-        // 4. 时长加分
+        if (distance < 5000) score += 0.3;
+        else if (distance < 15000) score += 0.15;
         const durationHours: number = (seg.endTime - seg.startTime) / (60 * 60 * 1000);
-        if (durationHours > 0.5) {
-          score += Math.min(0.2, durationHours * 0.1);
-        }
-
-        scoredSegments.push({ seg: seg, score: score });
+        if (durationHours > 0.5) score += Math.min(0.15, durationHours * 0.05);
+        scoredSegments.push({ seg, score });
       }
 
-      // 按分数排序，取前 3 个
       scoredSegments.sort((a, b) => b.score - a.score);
-      const topSegments = scoredSegments.slice(0, 3);
+      const topSegments = scoredSegments.slice(0, 6);
 
-      // 转换为 Recommendation 对象
       const recommendations: Recommendation[] = [];
       for (const item of topSegments) {
         const seg = item.seg;
         const rec: Recommendation = new Recommendation();
-        rec.placeName = seg.poiName || this.activityLabel(seg.activityType) || '推荐地点';
+        rec.placeName = seg.poiName || this.activityLabel(seg.activityType) || '附近地点';
         rec.placeType = seg.activityType;
         rec.latitude = seg.latitude;
         rec.longitude = seg.longitude;
         rec.triggerContext = context;
-        rec.reason = '根据你的历史出行习惯推荐';
+        rec.reason = cityName ? `${cityName}你曾去过` : '同城你曾去过';
         rec.isAccepted = 0;
         rec.timestamp = Date.now();
         recommendations.push(rec);
       }
 
-      Logger.info(TAG, 'Fallback recs from history: %{public}d (placeType=%{public}s)',
-        recommendations.length, placeType);
+      Logger.info(TAG, 'Same-city fallback: %{public}d (in %{public}s)', recommendations.length, cityName);
       return recommendations;
-
     } catch (e) {
       Logger.warn(TAG, 'Fallback recs failed: %{public}s', JSON.stringify(e));
       return [];
@@ -626,23 +781,41 @@ export class RecommendationEngine {
     return '餐厅 美食';
   }
 
-  /**
-   * 二级重试：用宽泛关键词（不依赖用户偏好）
-   */
-  private pickFallbackQuery(placeType: string, hour: number, day: number): string {
-    if (placeType === 'leisure') {
-      return '公园 景点 商场';
+  /** 根据 POI 名称生成描述介绍（不依赖 placeType，因为传进来的是 context 而非 activity type） */
+  private generateDescription(name: string, _placeType: string): string {
+    // 按关键词细化描述 — 覆盖足够广，确保大部分 POI 都有匹配
+    const descMap: Array<[string[], string]> = [
+      [['火锅', '海底捞'], '热气腾腾的火锅店，朋友聚餐首选'],
+      [['咖啡', '星巴克', '瑞幸'], '醇香咖啡，享受慢时光'],
+      [['奶茶', '茶', '甜品', 'CoCo', '蜜雪'], '甜蜜下午茶，治愈一整天'],
+      [['公园', '花园', '绿道'], '散步遛弯，呼吸新鲜空气'],
+      [['健身房', '体育馆', '游泳', '运动', '瑜伽'], '燃烧卡路里，释放压力'],
+      [['影院', '电影院', '万达', 'IMAX'], '精彩大片上映中'],
+      [['商场', '购物', '百货', '银泰', '万达', '万象', '龙湖', '天街'], '逛逛逛买买买的好地方'],
+      [['烤肉', '烧烤', '烧肉'], '滋滋美味烤肉，香气四溢'],
+      [['面馆', '米粉', '米线', '小吃', '拉面'], '地道风味，一口满足'],
+      [['川菜', '麻辣', '串串', '冒菜', '火锅'], '正宗川味，麻辣鲜香'],
+      [['日料', '寿司', '拉面', '居酒屋'], '精致日料，视觉味觉双享受'],
+      [['KTV', '唱歌', 'K歌'], '尽情欢唱，释放歌喉'],
+      [['景区', '景点', '博物馆', '古镇'], '值得一逛的好地方'],
+      [['书店', '图书馆', '书城'], '书香时光，充电放松'],
+      [['酒吧', '酒馆', '精酿'], '微醺夜晚，放松心情'],
+      [['超市', '便利店', '盒马', '永辉', '沃尔玛'], '日常购物补给站'],
+      [['酒店', '宾馆', '民宿'], '舒适住宿，宾至如归'],
+      [['洗浴', '温泉', '汗蒸', '足疗'], '泡汤放松，洗去疲惫'],
+      [['台球', '棋牌', '密室', '剧本', '电竞', '网吧'], '休闲娱乐好去处'],
+      [['花', '宠物', '猫咖', '狗咖'], '治愈系萌宠时光'],
+      [['烘焙', '面包', '蛋糕'], '新鲜出炉，香甜可口'],
+      [['快餐', '汉堡', '炸鸡', '披萨', '肯德基', '麦当劳'], '快速美味，随时享用'],
+    ];
+    for (const [kws, desc] of descMap) {
+      for (const kw of kws) { if (name.includes(kw)) return desc; }
     }
-    if (hour >= 7 && hour < 10) {
-      return '早餐 面馆';
-    } else if (hour >= 11 && hour < 14) {
-      return '午餐 餐厅 美食';
-    } else if (hour >= 14 && hour < 17) {
-      return '咖啡 下午茶';
-    } else if (hour >= 17 && hour < 21) {
-      return '晚餐 餐厅 美食';
-    }
-    return '餐厅 美食';
+    // 通用兜底：通过名称长度和结尾词推断
+    if (name.includes('餐') || name.includes('饭') || name.includes('食')) return '美食打卡地';
+    if (name.includes('店')) return '值得一探的好店';
+    if (name.includes('广') || name.includes('中') || name.includes('大')) return '热门去处值得一去';
+    return '附近不错的选择';
   }
 
   /**
@@ -675,13 +848,27 @@ export class RecommendationEngine {
    */
   clearCache(): void {
     this.prefCache = null;
+    this.resultCache = null;
   }
 
-  private makeRec(name: string, type: string, context: string,
+  /** Amap POI 类型 → 活动类型 */
+  private mapPoiType(amapType: string): string {
+    if (!amapType) return 'dining';
+    if (amapType.includes('餐饮') || amapType.includes('餐厅') || amapType.includes('火锅') || amapType.includes('咖啡') || amapType.includes('奶茶')) return 'dining';
+    if (amapType.includes('购物') || amapType.includes('商场') || amapType.includes('超市')) return 'shopping';
+    if (amapType.includes('体育') || amapType.includes('运动') || amapType.includes('健身') || amapType.includes('游泳')) return 'sports';
+    if (amapType.includes('公园') || amapType.includes('景点') || amapType.includes('风景') || amapType.includes('电影院') || amapType.includes('KTV') || amapType.includes('娱乐')) return 'leisure';
+    if (amapType.includes('酒店') || amapType.includes('住宿') || amapType.includes('旅游')) return 'travel';
+    if (amapType.includes('公司') || amapType.includes('写字楼')) return 'work';
+    if (amapType.includes('交通') || amapType.includes('地铁') || amapType.includes('公交')) return 'commute';
+    return 'dining';
+  }
+
+  private makeRec(name: string, poiType: string, context: string,
                    lat: number, lng: number, dist: number, score: number): Recommendation {
     const r: Recommendation = new Recommendation();
     r.placeName = name;
-    r.placeType = type;
+    r.placeType = this.mapPoiType(poiType);  // 使用真实 POI 类型，而非上下文
     r.latitude = lat;
     r.longitude = lng;
     r.triggerContext = context;

@@ -10,7 +10,8 @@ import {
   TABLE_FOOTPRINT,
   TABLE_ACTIVITY_SEGMENT,
   TABLE_USER_PROFILE,
-  TABLE_RECOMMENDATION
+  TABLE_RECOMMENDATION,
+  TABLE_SEGMENT_CALIBRATION
 } from '../common/Constants';
 
 const TAG = 'DatabaseHelper';
@@ -111,11 +112,26 @@ export class DatabaseHelper {
       )
     `;
 
+    const createSegmentCalibrationSQL: string = `
+      CREATE TABLE IF NOT EXISTS ${TABLE_SEGMENT_CALIBRATION} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        day_key TEXT DEFAULT '',
+        segment_start_time INTEGER NOT NULL,
+        segment_end_time INTEGER DEFAULT 0,
+        calibrated_type TEXT DEFAULT '',
+        calibrated_poi_name TEXT DEFAULT '',
+        calibration_source TEXT DEFAULT 'manual',
+        calibrated_at INTEGER DEFAULT 0,
+        is_deleted INTEGER DEFAULT 0
+      )
+    `;
+
     try {
       await this.db.executeSql(createFootprintSQL);
       await this.db.executeSql(createActivitySegmentSQL);
       await this.db.executeSql(createUserProfileSQL);
       await this.db.executeSql(createRecommendationSQL);
+      await this.db.executeSql(createSegmentCalibrationSQL);
 
       // 创建索引
       await this.db.executeSql(
@@ -127,6 +143,9 @@ export class DatabaseHelper {
       await this.db.executeSql(
         `CREATE INDEX IF NOT EXISTS idx_activity_segment_day ON ${TABLE_ACTIVITY_SEGMENT}(day_key)`
       );
+      await this.db.executeSql(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_calibration_day_start ON ${TABLE_SEGMENT_CALIBRATION}(day_key, segment_start_time)`
+      );
 
       Logger.info(TAG, 'All tables created successfully');
 
@@ -134,6 +153,24 @@ export class DatabaseHelper {
       try {
         await this.db.executeSql(
           `ALTER TABLE ${TABLE_RECOMMENDATION} ADD COLUMN enrichment_json TEXT DEFAULT ''`
+        );
+      } catch (e) {
+        // 列已存在，忽略
+      }
+
+      // 迁移：为已有 segment_calibration 表添加 segment_end_time 列
+      try {
+        await this.db.executeSql(
+          `ALTER TABLE ${TABLE_SEGMENT_CALIBRATION} ADD COLUMN segment_end_time INTEGER DEFAULT 0`
+        );
+      } catch (e) {
+        // 列已存在，忽略
+      }
+
+      // 迁移：为已有 segment_calibration 表添加 is_deleted 列
+      try {
+        await this.db.executeSql(
+          `ALTER TABLE ${TABLE_SEGMENT_CALIBRATION} ADD COLUMN is_deleted INTEGER DEFAULT 0`
         );
       } catch (e) {
         // 列已存在，忽略

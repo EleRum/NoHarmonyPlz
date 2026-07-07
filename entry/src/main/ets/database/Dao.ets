@@ -10,11 +10,13 @@ import { Footprint } from '../model/Footprint';
 import { ActivitySegment } from '../model/ActivitySegment';
 import { UserProfile } from '../model/UserProfile';
 import { Recommendation } from '../model/Recommendation';
+import { SegmentCalibration } from '../model/SegmentCalibration';
 import {
   TABLE_FOOTPRINT,
   TABLE_ACTIVITY_SEGMENT,
   TABLE_USER_PROFILE,
   TABLE_RECOMMENDATION,
+  TABLE_SEGMENT_CALIBRATION,
   APP_TAG
 } from '../common/Constants';
 
@@ -365,6 +367,99 @@ export class Dao {
       }
     }
     return count;
+  }
+
+  /** 更新单个 ActivitySegment（适用于非当天的历史段编辑） */
+  async updateActivitySegment(seg: ActivitySegment): Promise<void> {
+    const db = this.getDb();
+    if (!db) return;
+
+    try {
+      await db.update(
+        TABLE_ACTIVITY_SEGMENT,
+        {
+          'activity_type': seg.activityType,
+          'poi_name': seg.poiName,
+          'summary': seg.summary
+        },
+        'id = ?',
+        [seg.id]
+      );
+    } catch (err) {
+      Logger.error(TAG, 'updateActivitySegment failed: %{public}s', JSON.stringify(err));
+    }
+  }
+
+  // ════════════════════════════════════════════════════════
+  //  SegmentCalibration CRUD
+  // ════════════════════════════════════════════════════════
+
+  async upsertSegmentCalibration(cal: SegmentCalibration): Promise<void> {
+    const db = this.getDb();
+    if (!db) return;
+
+    try {
+      // 先删再插，实现 upsert（HarmonyOS relationalStore 不支持 ON CONFLICT）
+      await db.delete(
+        TABLE_SEGMENT_CALIBRATION,
+        'day_key = ? AND segment_start_time = ?',
+        [cal.dayKey, cal.segmentStartTime]
+      );
+      await db.insert(TABLE_SEGMENT_CALIBRATION, cal.toValuesBucket());
+      Logger.info(TAG, 'upsertSegmentCalibration: day=%{public}s startTime=%{public}d',
+        cal.dayKey, cal.segmentStartTime);
+    } catch (err) {
+      Logger.error(TAG, 'upsertSegmentCalibration failed: %{public}s', JSON.stringify(err));
+    }
+  }
+
+  async queryCalibrationsByDay(dayKey: string): Promise<SegmentCalibration[]> {
+    const db = this.getDb();
+    if (!db) return [];
+
+    try {
+      const rs = await db.querySql(
+        `SELECT * FROM ${TABLE_SEGMENT_CALIBRATION} WHERE day_key = ?`,
+        [dayKey]
+      );
+      const list: SegmentCalibration[] = [];
+      while (rs.goToNextRow()) {
+        list.push(SegmentCalibration.fromResultSet(rs.getRow()));
+      }
+      rs.close();
+      return list;
+    } catch (err) {
+      Logger.error(TAG, 'queryCalibrationsByDay failed: %{public}s', JSON.stringify(err));
+      return [];
+    }
+  }
+
+  async deleteActivitySegmentById(id: number): Promise<void> {
+    const db = this.getDb();
+    if (!db) return;
+
+    try {
+      await db.delete(TABLE_ACTIVITY_SEGMENT, 'id = ?', [id]);
+    } catch (err) {
+      Logger.error(TAG, 'deleteActivitySegmentById failed: %{public}s', JSON.stringify(err));
+    }
+  }
+
+  async deleteSegmentCalibration(dayKey: string, startTime: number): Promise<void> {
+    const db = this.getDb();
+    if (!db) return;
+
+    try {
+      await db.delete(
+        TABLE_SEGMENT_CALIBRATION,
+        'day_key = ? AND segment_start_time = ?',
+        [dayKey, startTime]
+      );
+      Logger.info(TAG, 'deleteSegmentCalibration: day=%{public}s startTime=%{public}d',
+        dayKey, startTime);
+    } catch (err) {
+      Logger.error(TAG, 'deleteSegmentCalibration failed: %{public}s', JSON.stringify(err));
+    }
   }
 
   // ════════════════════════════════════════════════════════

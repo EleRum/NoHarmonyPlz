@@ -96,10 +96,13 @@ sk-你的密钥
 
 ```
 generateNow()
-  ├─ ① 按时段 + 用户偏好 → 搜索词（早餐→面馆 / 午餐→偏好 / 下午茶→咖啡 / 周末→景点）
-  ├─ ② 高德 REST API 并行双查询（精确 + 宽泛，1km 半径）+ 百度→大众点评
-  ├─ ③ 历史活动降级（排除 work/commute/home，所有有效类型打分取 top 3）
-  └─ ④ 终极兜底（空关键词搜附近任意 POI）
+  ├─ ① AI 生成 5 个搜索词（Claude/DeepSeek/盘古，无 AI 时兜底）
+  ├─ ② 渐进半径多类别搜索：1km → 2km → 5km，每个查询独立执行
+  ├─ ③ 提取照片：每个 POI 的 photos[0].url 直接从 place/around 响应获取
+  ├─ ④ 交错混合：5 个查询轮流取，保证类别多样性，≥10 条
+  ├─ ⑤ AI 批量生成推荐理由
+  ├─ ⑥ 空关键词扩大搜索
+  ├─ ⑦ 缓存复用 → 同城历史降级（< 30km，最多 3 条）
 ```
 
 ---
@@ -115,7 +118,7 @@ MyApplication2/
 │   │   ├── pages/                   # 6 个页面
 │   │   │   ├── MapPage.ets          # 主地图页（WebView + GPS + 足迹渲染）
 │   │   │   ├── TimelinePage.ets     # 时间线
-│   │   │   ├── RecommendPage.ets    # AI 推荐（30s 自动轮询）
+│   │   │   ├── RecommendPage.ets    # 今日推荐
 │   │   │   ├── ReportPage.ets       # 行程报告
 │   │   │   ├── WaypointDetailPage.ets # 足迹详情
 │   │   │   └── SettingsPage.ets     # 设置页
@@ -128,6 +131,8 @@ MyApplication2/
 │   │   │   ├── AgentScheduler.ets   # 定时推荐调度（GPS+地图就绪后触发）
 │   │   │   ├── WebRecommendationService.ets # Web 搜索（百度+大众点评）
 │   │   │   ├── WebSearchParser.ets  # 搜索结果解析（百度/DDG）
+│   │   │   ├── CalibrationService.ets # 校准服务（类型/名称/删除）
+│   │   │   ├── CalibrationSignal.ets  # 跨页面校准信号（模块级变量）
 │   │   │   ├── MockDataService.ets  # 模拟轨迹数据注入
 │   │   │   ├── PhotoService.ets     # 照片扫描
 │   │   │   └── map/                 # 地图桥接层
@@ -141,8 +146,8 @@ MyApplication2/
 │   │   │   ├── location/            # ILocationProvider + 实现
 │   │   │   └── photo/               # IPhotoAccess + 实现
 │   │   ├── database/                # DatabaseHelper + Dao
-│   │   ├── model/                   # Footprint / ActivitySegment / Recommendation / UserProfile
-│   │   └── common/                  # Logger / Constants / LocationUtils
+│   │   ├── model/                   # Footprint / ActivitySegment / Recommendation / UserProfile / SegmentCalibration
+│   │   └── common/                  # Logger / Constants / LocationUtils / CalibrationSignal
 │   └── resources/rawfile/map/       # map.html（内联 JS 桥接 + FootMapBridge）
 └── build-profile.json5              # 双目标构建配置
 ```
@@ -161,7 +166,12 @@ GPS ──→ LocationService ──→ Footprint.db
            │                      │                      │
            ▼                      ▼                      ▼
    ActivitySegment          Recommendation          ClaudeService
-         + Timeline         (地图+Web+降级)     (盘古/Claude/DeepSeek)
+    │ + CalibrationService                            │
+    │   (段校准/改名/删除)                             │
+    ▼                                                 ▼
+   segment_calibration                        (盘古/Claude/DeepSeek)
+   (独立校准记录表)
+         + Timeline + MapPage 实时刷新
 ```
 
 ### 数据库
@@ -172,6 +182,7 @@ GPS ──→ LocationService ──→ Footprint.db
 | `activity_segment` | 类型、起止时间、POI、照片数、摘要 |
 | `user_profile` | 键值偏好（API Key、权重） |
 | `recommendation` | 地点、类型、理由、来源、富数据 JSON |
+| `segment_calibration` | 日期、起止时间、校准类型、校准名称、来源、软删除标记 |
 
 ---
 
@@ -188,13 +199,16 @@ GPS ──→ LocationService ──→ Footprint.db
 
 ### 今日推荐
 
-主动推荐引擎，G​​PS + 地图 + 大众点评 + 用户习惯四维融合：
+AI 生成搜索意图 + 高德 POI 搜索 + 渐进半径 + 真实店面照片：
 
-- 🕐 **时段感知** — 早餐推面馆咖啡，午餐推偏好美食，下午推甜品，周末推景点
-- 📍 **周边优先** — 高德 REST API 直调，1km 半径，不依赖 WebView 状态
-- ⭐ **大众点评** — 百度搜索抓取评分/评论/推荐菜，Web 富数据合并展示
-- 🧠 **偏好学习** — 从历史 ActivitySegment 学习口味偏好，个性化打分排序
-- 🔄 **自动轮询** — 推荐页 30s 刷新，GPS 移动后自动更新
+- 🤖 **AI 搜索词生成** — Claude/DeepSeek/盘古分析时段/偏好/城市，生成 5 个搜索词涵盖多类别（无 AI 时兜底）
+- 📍 **渐进半径** — 1km → 2km → 5km，不够自动扩大，确保 ≥10 条推荐
+- 🖼️ **真实店面照片** — 高德 `place/around` 响应自带 `photos` 数组，直接提取第一张店面照；无照片时 emoji + 彩色卡片头
+- 📝 **AI 推荐理由** — 批量生成口语化推荐语（"周末遛娃圣地草坪超大"），无 AI 时关键词匹配兜底
+- ⭐ **Web 富数据** — 百度搜索大众点评/美团评分、评论数、推荐菜
+- 🔄 **交错混合** — 5 个搜索词轮流取结果，保证类别多样性
+- 🏙️ **同城过滤** — 历史降级仅限同城（距离 < 30km），最多 3 条
+- 🔘 **手动刷新** — 🔄 按钮主动刷新；位置偏移 >500m 自动刷新；不再 30s 轮询
 
 ### 工具调用
 
@@ -205,16 +219,30 @@ GPS ──→ LocationService ──→ Footprint.db
 | 📍 周边搜索 | "附近有什么好吃的" | 高德 REST API + JSAPI 双通道 |
 | 🌤️ 天气查询 | "今天天气" | 高德天气 API |
 
-### 活动段编辑
+### 活动段校准
 
-自然语言修改活动类型和地名：
+AI 自动分类可能出错。应用支持**手动校准**和 **AI Agent 校准**两种方式修正活动段的类型、地点名称，或直接删除误判的活动。
 
-```
-"昨天第1个改成购物"
-"今天下午的叫万象城"
-```
+#### 手动校准（WaypointDetailPage）
 
-→ 两步确认（AI 建议 → 用户"是/否"）→ 数据库更新
+地图或时间线点击段 → 详情页右侧 **✏️ 编辑**按钮 → 校准面板：
+
+| 操作 | 说明 | 实现 |
+|------|------|------|
+| 修改类型 | 8 种类型（餐饮/购物/运动/工作/居家/通勤/休闲/出行）点选即改 | `CalibrationService.calibrateType()` + 直接更新 `activity_segment` |
+| 修改名称 | 弹窗输入新地点名 | `CalibrationService.calibratePoiName()` + `Dao.updateActivitySegment()` |
+| 删除段 | 确认弹窗 → 段从 DB 移除 | `CalibrationService.deleteSegment()` 软删除 + 硬删除 |
+| 恢复 AI | 清除手动校准，恢复 AI 原始分类 | `CalibrationService.removeCalibration()` |
+
+#### AI Agent 校准
+
+聊天中自然语言修改，两步确认（建议 → "是/否"）→ `CalibrationService` + 直接段更新。
+
+#### 校准保护机制
+
+当天活动段每 30 秒被 `ActivityClassifier` 重新分类（先删后插）。校准记录存储在**独立**的 `segment_calibration` 表中，每次分类后通过**时间范围重叠匹配**自动合并到新生成的段上，确保校准不被覆盖。
+
+跨页面实时刷新通过 `CalibrationSignal` 模块级信号 + 2 秒轮询实现，不依赖生命周期回调。
 
 ---
 

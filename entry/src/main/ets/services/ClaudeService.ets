@@ -188,6 +188,22 @@ export class ClaudeService {
 
   // ─── 主入口 ───
 
+  /** 简化聊天（不带段上下文，用于推荐引擎等场景） */
+  async chatSimple(prompt: string): Promise<ClaudeReply> {
+    if (!this.hasKey) return { text: '' };
+    this.addToHistory('user', prompt);
+    const systemPrompt: string = `你是推荐搜索关键词生成助手。用户会描述当前情境（时间、地点、偏好），你只需返回 3 个高德地图 POI 搜索词，逗号分隔。`;
+    const fullPrompt: string = `${systemPrompt}\n\n---\n当前对话:\n用户: ${prompt}\n\n助手:`;
+    try {
+      const provider: string = this.detectProvider(this.apiKey);
+      if (provider === 'claude') return await this.chatClaude(fullPrompt);
+      if (provider === 'deepseek') return await this.chatDeepSeek(fullPrompt);
+      return await this.chatPangu(fullPrompt);
+    } catch (e) {
+      return { text: '' };
+    }
+  }
+
   async chat(msg: string, allSegs: ActivitySegment[], ctxInfo: string): Promise<ClaudeReply> {
     if (!this.hasKey) {
       return {

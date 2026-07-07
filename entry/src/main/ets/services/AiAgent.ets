@@ -6,6 +6,8 @@ import { Dao } from '../database/Dao';
 import { ActivitySegment } from '../model/ActivitySegment';
 import { getDayKey } from '../common/LocationUtils';
 import { ClaudeService, ClaudeReply } from './ClaudeService';
+import { CalibrationService } from './CalibrationService';
+import { CalibrationSource } from '../common/Constants';
 import { PlatformBridge } from '../platform/PlatformBridge';
 import { HttpResponse } from '../platform/network/INetworkProvider';
 import { AmapSearchService } from './map/AmapSearchService';
@@ -502,6 +504,21 @@ export class AiAgent {
       if (p.segIndex >= segs.length) return { text: '段已被删除，无法修改。' };
 
       const target: ActivitySegment = segs[p.segIndex];
+      const calService: CalibrationService = CalibrationService.getInstance();
+
+      // 1. 通过校准服务持久化修正（独立于 activity_segment 表，不惧覆盖）
+      if (p.newType && p.newPoiName) {
+        await calService.calibrateBoth(dayKey, target.startTime, p.newType, p.newPoiName,
+          CalibrationSource.AI_AGENT, target.endTime);
+      } else if (p.newType) {
+        await calService.calibrateType(dayKey, target.startTime, p.newType,
+          CalibrationSource.AI_AGENT, target.endTime);
+      } else if (p.newPoiName) {
+        await calService.calibratePoiName(dayKey, target.startTime, p.newPoiName,
+          CalibrationSource.AI_AGENT, target.endTime);
+      }
+
+      // 2. 立即应用修改到 activity_segment（立即生效，不等下次分类周期）
       if (p.newType) {
         target.activityType = p.newType;
         target.summary = `${p.newType} · ${Math.round((target.endTime - target.startTime) / 60000)}分钟`;
@@ -509,13 +526,14 @@ export class AiAgent {
       if (p.newPoiName) {
         target.poiName = p.newPoiName;
       }
+      await this.dao.updateActivitySegment(target);
 
-      await this.dao.deleteActivitySegmentsByDay(dayKey);
-      for (const s of segs) { await this.dao.insertActivitySegment(s); }
+      // 3. 刷新内存中的段数据
+      await this.loadRecentSegs();
 
       const desc: string = this.describeSeg(target, p.segIndex);
       const day: string = this.dayLabel(dayKey);
-      return { text: `已修改：${day} ${desc} [dayKey=${dayKey}]`, action: 'segments_changed' };
+      return { text: `已修改：${day} ${desc}`, action: 'segments_changed' };
     } catch (e) {
       return { text: '修改失败，请稍后再试。' };
     }
