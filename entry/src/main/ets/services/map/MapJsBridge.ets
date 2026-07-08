@@ -14,7 +14,8 @@ import {
   LatLng, LatLngBounds, MarkerOptions, MarkerIconStyle, PolylineOptions,
   MapType, PoiResult, GeocodeResult,
   MapReadyCallback, MarkerClickCallback, MapClickCallback,
-  SearchCallback, GeocodeCallback, CameraState, MapInitConfig, BatchMarkerItem, NearbyPoi
+  SearchCallback, GeocodeCallback, CameraState, MapInitConfig, BatchMarkerItem, NearbyPoi,
+  DirectionMode, DirectionRoute, NavRoute, NavStep
 } from './MapTypes';
 import { IMapService, MapEventCallbacks } from './IMapService';
 
@@ -31,8 +32,15 @@ export class MapJsBridge implements IMapService {
   private apiKey: string = '';
   private readyCallbacks: Array<(err: Error | null) => void> = [];
   private isReady: boolean = false;
-  private callbacks: MapEventCallbacks = {};
+  // 多订阅者回调列表（避免 AmapSearchService 和其他组件互相覆盖）
+  private callbackSubs: MapEventCallbacks[] = [];
   private camPosition: CameraState | null = null;
+  // 导航路线 Promise 解析
+  private directionResolveMap: Map<string, (result: DirectionRoute | null) => void> = new Map();
+  private directionReqSeq: number = 0;
+  // 增强导航路线 Promise（含步骤数据）
+  private navRouteResolveMap: Map<string, (result: NavRoute | null) => void> = new Map();
+  private navRouteReqSeq: number = 0;
 
   // ─── 生命周期 ───
 
@@ -86,7 +94,7 @@ export class MapJsBridge implements IMapService {
     }
     this.readyCallbacks = [];
     this.isReady = false;
-    this.callbacks = {};
+    this.callbackSubs = [];
     this.controller = null;
   }
 
@@ -253,25 +261,56 @@ export class MapJsBridge implements IMapService {
     );
   }
 
+  // ─── 导航路线 ───
+
+  requestDirectionRoute(from: LatLng, to: LatLng, mode: DirectionMode): Promise<DirectionRoute | null> {
+    const requestId: string = 'dr_' + (++this.directionReqSeq).toString();
+    return new Promise<DirectionRoute | null>((resolve) => {
+      const timeout: number = setTimeout(() => {
+        this.directionResolveMap.delete(requestId);
+        resolve(null);
+      }, 15000);
+
+      this.directionResolveMap.set(requestId, (result: DirectionRoute | null) => {
+        clearTimeout(timeout);
+        resolve(result);
+      });
+
+      this.execJs(
+        `FootMapBridge.getDirectionRoute(${from.longitude}, ${from.latitude}, ${to.longitude}, ${to.latitude}, '${mode}', '${requestId}')`
+      );
+    });
+  }
+
+  /**
+   * 请求导航路线（返回包含逐步导航指令的完整路线）
+   * 支持 driving / walking / transit / bicycling
+   */
+  requestNavigationRoute(from: LatLng, to: LatLng, mode: DirectionMode): Promise<NavRoute | null> {
+    const requestId: string = 'nr_' + (++this.navRouteReqSeq).toString();
+    return new Promise<NavRoute | null>((resolve) => {
+      const timeout: number = setTimeout(() => {
+        this.navRouteResolveMap.delete(requestId);
+        resolve(null);
+      }, 30000); // 公交查询可能需要更长时间
+
+      this.navRouteResolveMap.set(requestId, (result: NavRoute | null) => {
+        clearTimeout(timeout);
+        resolve(result);
+      });
+
+      // 复用现有的 JS getDirectionRoute 函数（已扩展为支持四种模式和步骤数据）
+      this.execJs(
+        `FootMapBridge.getDirectionRoute(${from.longitude}, ${from.latitude}, ${to.longitude}, ${to.latitude}, '${mode}', '${requestId}')`
+      );
+    });
+  }
+
   // ─── 事件回调 ───
 
   setEventCallbacks(callbacks: MapEventCallbacks): void {
-    // Merge（而非替换），避免后来者覆盖已注册的回调（如 AmapSearchService 的 onSearchResult）
-    if (callbacks.onMapReady !== undefined) {
-      this.callbacks.onMapReady = callbacks.onMapReady;
-    }
-    if (callbacks.onMarkerClick !== undefined) {
-      this.callbacks.onMarkerClick = callbacks.onMarkerClick;
-    }
-    if (callbacks.onMapClick !== undefined) {
-      this.callbacks.onMapClick = callbacks.onMapClick;
-    }
-    if (callbacks.onSearchResult !== undefined) {
-      this.callbacks.onSearchResult = callbacks.onSearchResult;
-    }
-    if (callbacks.onGeocodeResult !== undefined) {
-      this.callbacks.onGeocodeResult = callbacks.onGeocodeResult;
-    }
+    // 追加订阅者（而非替换），多个组件可同时接收同一事件
+    this.callbackSubs.push(callbacks);
   }
 
   /**
@@ -290,15 +329,15 @@ export class MapJsBridge implements IMapService {
             cb(null);
           }
           this.readyCallbacks = [];
-          if (this.callbacks.onMapReady) {
-            this.callbacks.onMapReady(null);
+          for (const sub of this.callbackSubs) {
+            if (sub.onMapReady) sub.onMapReady(null);
           }
           Logger.info(TAG, 'Map ready (JSAPI)');
           break;
 
         case 'mapClick':
-          if (this.callbacks.onMapClick) {
-            this.callbacks.onMapClick(
+          for (const sub of this.callbackSubs) {
+            if (sub.onMapClick) sub.onMapClick(
               data['lat'] as number ?? 0,
               data['lng'] as number ?? 0
             );
@@ -306,8 +345,8 @@ export class MapJsBridge implements IMapService {
           break;
 
         case 'markerClick':
-          if (this.callbacks.onMarkerClick) {
-            this.callbacks.onMarkerClick(
+          for (const sub of this.callbackSubs) {
+            if (sub.onMarkerClick) sub.onMarkerClick(
               data['id'] as string ?? '',
               data['lat'] as number ?? 0,
               data['lng'] as number ?? 0,
@@ -333,8 +372,7 @@ export class MapJsBridge implements IMapService {
           };
           break;
 
-        case 'searchResult':
-          if (this.callbacks.onSearchResult) {
+        case 'searchResult': {
             const pois: PoiResult[] = [];
             const arr: Object[] = data['pois'] as Object[] ?? [];
             for (const p of arr) {
@@ -349,12 +387,13 @@ export class MapJsBridge implements IMapService {
                 tel: poi['tel'] as string ?? ''
               });
             }
-            this.callbacks.onSearchResult(pois);
+            for (const sub of this.callbackSubs) {
+              if (sub.onSearchResult) sub.onSearchResult(pois);
+            }
           }
           break;
 
-        case 'geocodeResult':
-          if (this.callbacks.onGeocodeResult) {
+        case 'geocodeResult': {
             const addr: Record<string, Object> | null = data['address'] as Record<string, Object> | null;
             if (addr) {
               const nearby: Object[] = addr['pois'] as Object[] ?? [];
@@ -369,14 +408,131 @@ export class MapJsBridge implements IMapService {
                 };
                 parsedPois.push(poiEntry);
               }
-              this.callbacks.onGeocodeResult({
+              const geoResult: GeocodeResult = {
                 formattedAddress: addr['formattedAddress'] as string ?? '',
                 city: addr['city'] as string ?? '',
                 district: addr['district'] as string ?? '',
                 nearbyPois: parsedPois
-              });
+              };
+              for (const sub of this.callbackSubs) {
+                if (sub.onGeocodeResult) sub.onGeocodeResult(geoResult);
+              }
             } else {
-              this.callbacks.onGeocodeResult(null);
+              for (const sub of this.callbackSubs) {
+                if (sub.onGeocodeResult) sub.onGeocodeResult(null);
+              }
+            }
+          }
+          break;
+
+        case 'directionResult':
+          const dirReqId: string = data['requestId'] as string ?? '';
+
+          // 解析 route 数据（公共逻辑）
+          const routeData: Record<string, Object> | null = data['route'] as Record<string, Object> | null;
+
+          if (!routeData) {
+            // 两个 resolver 都可能存在，统一处理失败
+            const dirResolveFail = this.directionResolveMap.get(dirReqId);
+            if (dirResolveFail) { this.directionResolveMap.delete(dirReqId); dirResolveFail(null); }
+            const navResolveFail = this.navRouteResolveMap.get(dirReqId);
+            if (navResolveFail) { this.navRouteResolveMap.delete(dirReqId); navResolveFail(null); }
+            break;
+          }
+
+          // 解析基础路径
+          const pathRaw: Object[] = routeData['path'] as Object[] ?? [];
+          const path: LatLng[] = [];
+          for (let pi: number = 0; pi < pathRaw.length; pi++) {
+            const pt = pathRaw[pi] as Record<string, Object>;
+            path.push({
+              latitude: pt['lat'] as number ?? 0,
+              longitude: pt['lng'] as number ?? 0,
+            } as LatLng);
+          }
+
+          // 解析旧版 DirectionRoute resolver
+          const dirResolve = this.directionResolveMap.get(dirReqId);
+          if (dirResolve) {
+            this.directionResolveMap.delete(dirReqId);
+            const dr: DirectionRoute = {
+              distance: routeData['distance'] as number ?? 0,
+              duration: routeData['duration'] as number ?? 0,
+              path: path,
+            };
+            dirResolve(dr);
+          }
+
+          // 解析新版 NavRoute resolver（含步骤数据）
+          const navResolve = this.navRouteResolveMap.get(dirReqId);
+          if (navResolve) {
+            this.navRouteResolveMap.delete(dirReqId);
+            // 解析 steps
+            const stepsRaw: Object[] = routeData['steps'] as Object[] ?? [];
+            const steps: NavStep[] = [];
+            for (let si: number = 0; si < stepsRaw.length; si++) {
+              const s = stepsRaw[si] as Record<string, Object>;
+              const stepPathRaw: Object[] = s['path'] as Object[] ?? [];
+              const stepPath: LatLng[] = [];
+              for (let spi: number = 0; spi < stepPathRaw.length; spi++) {
+                const spt = stepPathRaw[spi] as Record<string, Object>;
+                stepPath.push({
+                  latitude: spt['lat'] as number ?? 0,
+                  longitude: spt['lng'] as number ?? 0,
+                } as LatLng);
+              }
+              steps.push({
+                instruction: s['instruction'] as string ?? '',
+                road: s['road'] as string ?? '',
+                distance: s['distance'] as number ?? 0,
+                duration: s['duration'] as number ?? 0,
+                orientation: s['orientation'] as string ?? '',
+                action: s['action'] as string ?? '',
+                path: stepPath,
+              } as NavStep);
+            }
+            const nr: NavRoute = {
+              distance: routeData['distance'] as number ?? 0,
+              duration: routeData['duration'] as number ?? 0,
+              path: path,
+              steps: steps,
+              origin: routeData['origin'] as string ?? '',
+              destination: routeData['destination'] as string ?? '',
+            };
+            navResolve(nr);
+          }
+
+          // 触发回调（通知所有订阅者）
+          for (const sub of this.callbackSubs) {
+            if (sub.onNavRouteResult) {
+            const stepsRawCb: Object[] = routeData['steps'] as Object[] ?? [];
+            const stepsCb: NavStep[] = [];
+            for (let sci: number = 0; sci < stepsRawCb.length; sci++) {
+              const sc = stepsRawCb[sci] as Record<string, Object>;
+              const spRaw: Object[] = sc['path'] as Object[] ?? [];
+              const sp: LatLng[] = [];
+              for (let spi2: number = 0; spi2 < spRaw.length; spi2++) {
+                const spt2 = spRaw[spi2] as Record<string, Object>;
+                sp.push({ latitude: spt2['lat'] as number ?? 0, longitude: spt2['lng'] as number ?? 0 } as LatLng);
+              }
+              stepsCb.push({
+                instruction: sc['instruction'] as string ?? '',
+                road: sc['road'] as string ?? '',
+                distance: sc['distance'] as number ?? 0,
+                duration: sc['duration'] as number ?? 0,
+                orientation: sc['orientation'] as string ?? '',
+                action: sc['action'] as string ?? '',
+                path: sp,
+              } as NavStep);
+            }
+            sub.onNavRouteResult({
+              distance: routeData['distance'] as number ?? 0,
+              duration: routeData['duration'] as number ?? 0,
+              path: path,
+              steps: stepsCb,
+              origin: routeData['origin'] as string ?? '',
+              destination: routeData['destination'] as string ?? '',
+            } as NavRoute);
             }
           }
           break;

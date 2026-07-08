@@ -7,8 +7,12 @@
 import {
   LatLng, LatLngBounds, MarkerOptions, PolylineOptions,
   MapType, MapReadyCallback, MarkerClickCallback, MapClickCallback,
-  SearchCallback, GeocodeCallback, MapInitConfig, CameraState, BatchMarkerItem
+  SearchCallback, GeocodeCallback, MapInitConfig, CameraState, BatchMarkerItem,
+  DirectionMode, DirectionRoute, NavRoute
 } from './MapTypes';
+
+/** 导航路线回调类型 */
+export type NavRouteCallback = (route: NavRoute | null) => void;
 
 /** 地图事件回调集合 */
 export interface MapEventCallbacks {
@@ -17,6 +21,7 @@ export interface MapEventCallbacks {
   onMapClick?: MapClickCallback;
   onSearchResult?: SearchCallback;
   onGeocodeResult?: GeocodeCallback;
+  onNavRouteResult?: NavRouteCallback;
 }
 
 export interface IMapService {
@@ -103,6 +108,14 @@ export interface IMapService {
 
   /** 逆地理编码 / 查找最近地点 */
   lookupNearestPlace(target: LatLng): void;
+
+  // ─── 导航路线 ───
+
+  /** 请求两点间的导航路线（driving/walking/transit/bicycling），返回路径点序列 */
+  requestDirectionRoute(from: LatLng, to: LatLng, mode: DirectionMode): Promise<DirectionRoute | null>;
+
+  /** 请求导航路线（返回包含逐步导航指令的完整路线） */
+  requestNavigationRoute(from: LatLng, to: LatLng, mode: DirectionMode): Promise<NavRoute | null>;
 
   // ─── 事件 ───
 

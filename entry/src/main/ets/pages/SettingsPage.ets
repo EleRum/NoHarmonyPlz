@@ -1,0 +1,324 @@
+/**
+ * 设置页面 — 管理 AI 密钥
+ * 支持 Claude / DeepSeek / 华为盘古，全部可自定义端点和模型名
+ */
+import { Logger } from '../common/Logger';
+import { ClaudeService } from '../services/ClaudeService';
+import { Dao } from '../database/Dao';
+
+const TAG = 'SettingsPage';
+
+type AiProvider = 'claude' | 'deepseek' | 'pangu';
+
+interface ProviderOption {
+  key: AiProvider;
+  label: string;
+  desc: string;
+  prefixHint: string;
+  defaultEndpoint: string;
+  defaultModel: string;
+}
+
+const PROVIDER_OPTIONS: ProviderOption[] = [
+  {
+    key: 'deepseek', label: 'DeepSeek', desc: '便宜好用', prefixHint: 'sk-xxx…',
+    defaultEndpoint: 'https://api.deepseek.com/chat/completions',
+    defaultModel: 'deepseek-chat'
+  },
+  {
+    key: 'claude', label: 'Claude', desc: '更聪明', prefixHint: 'sk-ant-xxx…',
+    defaultEndpoint: 'https://api.anthropic.com/v1/messages',
+    defaultModel: 'claude-sonnet-4-6-20250514'
+  },
+  {
+    key: 'pangu', label: '华为盘古', desc: '国产大模型', prefixHint: 'Bearer Token',
+    defaultEndpoint: 'https://api.modelarts-maas.com/v2/chat/completions',
+    defaultModel: 'openpangu-2.0-flash'
+  },
+];
+
+@Component
+export struct SettingsContent {
+  onTabChange: (index: number) => void = () => {};
+  @State apiKey: string = '';
+  @State providerName: string = '';
+  @State hasKey: boolean = false;
+  @State isSaving: boolean = false;
+  @State showKey: boolean = false;
+  @State toastMsg: string = '';
+  @State toastVisible: boolean = false;
+  @State selectedProvider: AiProvider = 'deepseek';
+  @State customEndpoint: string = '';
+  @State customModel: string = '';
+
+  private claude: ClaudeService = new ClaudeService();
+  private dao: Dao = Dao.getInstance();
+
+  aboutToAppear(): void {
+    Logger.info(TAG, 'SettingsPage aboutToAppear');
+    this.loadKey();
+  }
+
+  async loadKey(): Promise<void> {
+    await this.claude.loadApiKey();
+    this.hasKey = this.claude.hasKey;
+    this.providerName = this.claude.providerName;
+    const currentProvider: string = this.claude.providerType;
+    if (currentProvider === 'claude' || currentProvider === 'deepseek' || currentProvider === 'pangu') {
+      this.selectedProvider = currentProvider;
+    }
+    if (this.hasKey) {
+      this.apiKey = '••••••••••••••••••••';
+    }
+    // 加载当前选中 provider 的自定义配置
+    this.refreshProviderFields();
+  }
+
+  /** 选中 provider 变化时，刷新端点和模型输入框 */
+  private refreshProviderFields(): void {
+    const ep: string = this.claude.getEndpoint(this.selectedProvider);
+    const model: string = this.claude.getModel(this.selectedProvider);
+    // 如果已有覆盖值就用覆盖值，否则显示默认值作为 placeholder
+    this.customEndpoint = (ep !== this.getDefault().defaultEndpoint) ? ep : '';
+    this.customModel = (model !== this.getDefault().defaultModel) ? model : '';
+  }
+
+  private getDefault(): ProviderOption {
+    const found: ProviderOption | undefined = PROVIDER_OPTIONS.find(o => o.key === this.selectedProvider);
+    return found!;
+  }
+
+  onChangeProvider(provider: AiProvider): void {
+    this.selectedProvider = provider;
+    this.refreshProviderFields();
+  }
+
+  private showToast(msg: string): void {
+    this.toastMsg = msg;
+    this.toastVisible = true;
+    setTimeout(() => { this.toastVisible = false; }, 2200);
+  }
+
+  async saveKey(): Promise<void> {
+    const raw: string = this.apiKey.trim();
+    if (raw.length === 0) {
+      this.showToast('请输入密钥');
+      return;
+    }
+    if (raw.startsWith('••••')) {
+      this.showToast('密钥未修改');
+      return;
+    }
+
+    const autoDetect: string = ClaudeService.detectProvider(raw);
+    let provider: AiProvider;
+    if (autoDetect !== 'none') {
+      provider = autoDetect as AiProvider;
+      this.selectedProvider = provider;
+    } else {
+      provider = this.selectedProvider;
+    }
+
+    this.isSaving = true;
+    try {
+      // 1. 保存密钥
+      await this.claude.setApiKey(raw, provider);
+      // 2. 保存自定义端点和模型（空则恢复默认）
+      const ep: string = this.customEndpoint.trim();
+      const model: string = this.customModel.trim();
+      await this.claude.setProviderConfig(
+        provider,
+        ep.length > 0 ? ep : this.getDefault().defaultEndpoint,
+        model.length > 0 ? model : this.getDefault().defaultModel
+      );
+      this.hasKey = true;
+      this.providerName = this.claude.providerName;
+      this.apiKey = '••••••••••••••••••••';
+      this.showToast('密钥已保存 ✅');
+    } catch (e) {
+      Logger.error(TAG, 'Failed to save key: %{public}s', JSON.stringify(e));
+      this.showToast('保存失败，请重试');
+    } finally {
+      this.isSaving = false;
+    }
+  }
+
+  async clearKey(): Promise<void> {
+    try {
+      await this.claude.setApiKey('');
+      this.apiKey = '';
+      this.hasKey = false;
+      this.providerName = '';
+      this.showToast('密钥已清除');
+    } catch (e) {
+      Logger.error(TAG, 'Failed to clear key: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  build() {
+    Stack() {
+      Column() {
+        Row() {
+          Text('⚙️ 设置')
+            .fontSize(20).fontWeight(FontWeight.Bold).fontColor('#1A1A1A')
+          Blank()
+        }
+        .width('100%').padding({ left: 20, right: 20, top: 16, bottom: 12 })
+
+        Divider().color('#F0F0F0')
+
+        Scroll() {
+          Column() {
+            // ─── AI 密钥 ───
+            this.CardTitle('🤖 AI 密钥', '支持 Claude / DeepSeek / 华为盘古')
+            this.CardSpacer()
+
+            if (this.hasKey) {
+              Row() {
+                Text('当前服务:').fontSize(14).fontColor('#888')
+                Text(this.providerName)
+                  .fontSize(14).fontColor('#3B82F6').fontWeight(FontWeight.Medium)
+                  .margin({ left: 6 })
+              }
+              .width('100%').margin({ bottom: 12 })
+            }
+
+            // ─── 服务商选择 ───
+            Text('选择服务商').fontSize(13).fontColor('#888').margin({ bottom: 8 }).width('100%')
+            Row() {
+              ForEach(PROVIDER_OPTIONS, (opt: ProviderOption, index: number) => {
+                Column() {
+                  Text(opt.label)
+                    .fontSize(13)
+                    .fontColor(this.selectedProvider === opt.key ? '#FFFFFF' : '#666')
+                    .fontWeight(this.selectedProvider === opt.key ? FontWeight.Medium : FontWeight.Normal)
+                  Text(opt.desc)
+                    .fontSize(10)
+                    .fontColor(this.selectedProvider === opt.key ? '#FFFFFFCC' : '#AAA')
+                    .margin({ top: 2 })
+                }
+                .width('31%').height(52).borderRadius(8)
+                .backgroundColor(this.selectedProvider === opt.key ? '#3B82F6' : '#F0F1F3')
+                .justifyContent(FlexAlign.Center)
+                .onClick(() => { this.onChangeProvider(opt.key); })
+                .margin({ right: 8 })
+              })
+            }
+            .width('100%').margin({ bottom: 10 })
+
+            // ─── 密钥输入 ───
+            TextInput({ placeholder: '输入密钥 ' + this.getDefault().prefixHint, text: this.apiKey })
+              .type(this.showKey ? InputType.Normal : InputType.Password)
+              .fontSize(14).width('100%').height(44)
+              .backgroundColor('#F8F9FA').borderRadius(8)
+              .padding({ left: 12, right: 36 })
+              .onChange((value: string) => { this.apiKey = value; })
+
+            // ─── 自定义端点（所有 provider 通用）───
+            this.CardSpacer()
+            Text('⚡ 自定义端点（可选，留空使用默认）')
+              .fontSize(13).fontColor('#888').margin({ bottom: 6 }).width('100%')
+
+            TextInput({ placeholder: this.getDefault().defaultEndpoint, text: this.customEndpoint })
+              .fontSize(13).width('100%').height(40)
+              .backgroundColor('#F8F9FA').borderRadius(8)
+              .padding({ left: 12, right: 12 })
+              .onChange((value: string) => { this.customEndpoint = value; })
+
+            Text('模型名（可选，留空使用默认）')
+              .fontSize(12).fontColor('#AAA').margin({ top: 6, bottom: 4 }).width('100%')
+
+            TextInput({ placeholder: this.getDefault().defaultModel, text: this.customModel })
+              .fontSize(13).width('100%').height(40)
+              .backgroundColor('#F8F9FA').borderRadius(8)
+              .padding({ left: 12, right: 12 })
+              .onChange((value: string) => { this.customModel = value; })
+
+            // ─── 操作按钮 ───
+            Row() {
+              Row() {
+                Text(this.showKey ? '🙈' : '👁️').fontSize(14)
+                Text(this.showKey ? '隐藏' : '显示').fontSize(12).fontColor('#888').margin({ left: 4 })
+              }
+              .onClick(() => { this.showKey = !this.showKey; })
+              Blank()
+              if (this.hasKey) {
+                Button('清除密钥')
+                  .fontSize(12).fontColor('#EF4444').backgroundColor('#FEF2F2')
+                  .borderRadius(6).height(32)
+                  .onClick(() => { this.clearKey(); })
+              }
+              Button(this.isSaving ? '保存中…' : '保存')
+                .fontSize(12).fontColor('#FFFFFF')
+                .backgroundColor(this.isSaving ? '#93C5FD' : '#3B82F6')
+                .borderRadius(6).height(32)
+                .enabled(!this.isSaving)
+                .onClick(() => { this.saveKey(); })
+                .margin({ left: 8 })
+            }
+            .width('100%').margin({ top: 10 })
+
+            this.CardSpacer()
+
+            // 说明
+            Column() {
+              this.InfoRow('🔑', '获取密钥')
+              Text('  Claude: console.anthropic.com → API Keys').fontSize(11).fontColor('#AAA').margin({ left: 24, bottom: 4 })
+              Text('  DeepSeek: platform.deepseek.com → API Keys').fontSize(11).fontColor('#AAA').margin({ left: 24, bottom: 4 })
+              Text('  华为盘古: console.huaweicloud.com/modelarts → 应用接入 → API Key').fontSize(11).fontColor('#AAA').margin({ left: 24, bottom: 10 })
+              this.InfoRow('💡', '密钥仅保存在本地数据库')
+              Text('  不会上传到任何第三方服务器（除对应 AI 服务商外）。').fontSize(11).fontColor('#AAA').margin({ left: 24, bottom: 4 }).maxLines(3)
+            }
+            .width('100%').alignItems(HorizontalAlign.Start).margin({ top: 12 })
+
+            this.CardSpacer()
+            this.CardSpacer()
+            this.CardTitle('📱 关于', '足迹地图 v2.0.1')
+            this.CardSpacer()
+            Column() {
+              this.InfoRow('📍', '记录每一天的足迹，发现生活轨迹')
+              this.InfoRow('🗺️', '基于高德地图 JSAPI v2.0')
+              this.InfoRow('🧠', 'AI 助手"小足"陪你聊天、推荐周边')
+            }
+            .width('100%').alignItems(HorizontalAlign.Start).margin({ top: 4 })
+          }
+          .width('100%').padding({ left: 16, right: 16, bottom: 20 })
+        }
+        .layoutWeight(1).scrollBar(BarState.Off)
+      }
+      .width('100%').height('100%').backgroundColor('#F5F6F8')
+
+      if (this.toastVisible) {
+        Text(this.toastMsg)
+          .fontSize(13).fontColor('#FFFFFF').backgroundColor('#333333CC')
+          .borderRadius(20).padding({ left: 20, right: 20, top: 10, bottom: 10 })
+          .position({ bottom: 80 })
+          .transition(TransitionEffect.OPACITY.animation({ duration: 300 }))
+      }
+    }
+    .width('100%').height('100%')
+  }
+
+  @Builder
+  CardTitle(title: string, subtitle: string) {
+    Column() {
+      Text(title).fontSize(15).fontWeight(FontWeight.Medium).fontColor('#1A1A1A')
+      Text(subtitle).fontSize(11).fontColor('#AAA').margin({ top: 2 })
+    }
+    .alignItems(HorizontalAlign.Start).width('100%')
+  }
+
+  @Builder
+  CardSpacer() {
+    Row().width('100%').height(12)
+  }
+
+  @Builder
+  InfoRow(icon: string, text: string) {
+    Row() {
+      Text(icon).fontSize(14)
+      Text(text).fontSize(12).fontColor('#666').margin({ left: 6 })
+    }
+    .margin({ top: 6 })
+  }
+}

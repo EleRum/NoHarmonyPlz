@@ -25,16 +25,11 @@ import { Recommendation } from '../model/Recommendation';
 import { AiAgent, AgentReply } from '../services/AiAgent';
 import { CalibrationService } from '../services/CalibrationService';
 import { CalibrationSignal } from '../common/CalibrationSignal';
-import { TourGuideService, TourNarration } from '../services/TourGuideService';
-import { TourPlannerService } from '../services/TourPlannerService';
-import { TourPanel } from './TourPanel';
-import { TourPoi } from '../model/TourPoi';
-import { TourPlan, TourDay } from '../model/TourDay';
-import { TourContent } from './TourContent';
 import { IMapService, MapEventCallbacks } from '../services/map/IMapService';
 import { MapJsBridge } from '../services/map/MapJsBridge';
 import {
-  LatLng, LatLngBounds, MarkerIconStyle, MapInitConfig
+  LatLng, LatLngBounds, MarkerIconStyle, MapInitConfig,
+  DirectionMode, NavRoute, NavStep, PoiResult
 } from '../services/map/MapTypes';
 
 const TAG = 'MapPage';
@@ -123,17 +118,24 @@ export struct MapPage {
   ];
   @State isAiThinking: boolean = false;
   @State timelineRefreshKey: number = 0;
+  // ─── 导航状态 ───
+  @State showNavigation: boolean = false;
+  @State navSearchQuery: string = '';
+  @State navSearchResults: PoiResult[] = [];
+  @State navIsSearching: boolean = false;
+  @State navRoute: NavRoute | null = null;
+  @State navMode: DirectionMode = DirectionMode.DRIVING;
+  @State navIsCalculating: boolean = false;
+  @State navSelectedStepIndex: number = -1;
+  @State navOriginLat: number = 0;
+  @State navOriginLng: number = 0;
+  @State navOriginName: string = '当前位置';
+  private navRoutePolylineId: string = '';
+  private navStartMarkerId: string = '';
+  private navEndMarkerId: string = '';
   private lastProcessedCalTs: number = 0;
   private calPoller: number | null = null;
   private aiAgent: AiAgent | null = null;
-  // 导游模式
-  @State tourActive: boolean = false;
-  @State tourNarration: TourNarration | null = null;
-  private tourPlan: TourPlan | null = null;
-  private tourGuide: TourGuideService = TourGuideService.getInstance();
-  private tourPlanner: TourPlannerService = new TourPlannerService();
-  private tourDayMarkers: string[] = [];
-  private tourPolylines: string[] = [];
 
   private getAiAgent(): AiAgent {
     if (!this.aiAgent) this.aiAgent = new AiAgent(this.dao);
@@ -463,8 +465,10 @@ export struct MapPage {
       onMarkerClick: (id: string, lat: number, lng: number, _title: string): void => {
         this.handleMapMarkerClick(id, lat, lng);
       },
-      onMapClick: (_lat: number, _lng: number): void => {
-        // 处理地图点击
+      onMapClick: (lat: number, lng: number): void => {
+        if (this.showNavigation) {
+          this.navMapClickSelect(lat, lng);
+        }
       }
     };
     bridge.setEventCallbacks(callbacks);
@@ -639,10 +643,6 @@ export struct MapPage {
       }
       this.locationReady = true;
       AgentScheduler.getInstance().updateLocation(gpsPt.latitude, gpsPt.longitude);
-      // 导游模式 GPS 传递
-      if (this.tourActive) {
-        this.tourGuide.onLocationChange(loc.latitude, loc.longitude);
-      }
       // GPS 定位成功后，如果地图也准备好了，触发首次推荐
       this.tryStartRecommending();
 
@@ -810,47 +810,7 @@ export struct MapPage {
     this.segmentInfoMap = {};
   }
 
-  /** 绘制行程路线和 POI 标记 */
-  drawTourOnMap(): void {
-    const ms: IMapService | null = this.mapService;
-    if (!ms || !this.tourPlan) return;
-    // 清除旧标记
-    for (const m of this.tourDayMarkers) { try { ms.removeMarker(m); } catch (e) {} }
-    for (const p of this.tourPolylines) { try { ms.removePolyline(p); } catch (e) {} }
-    this.tourDayMarkers = [];
-    this.tourPolylines = [];
-
-    for (const day of this.tourPlan.days) {
-      const pts: LatLng[] = [];
-      for (const poi of day.pois) {
-        if (poi.lat && poi.lng) {
-          pts.push({ latitude: poi.lat, longitude: poi.lng });
-          const mid: string = ms.addMarker({
-            position: { latitude: poi.lat, longitude: poi.lng },
-            title: `D${day.dayIndex + 1}-${poi.orderIndex + 1} ${poi.name}`,
-            snippet: poi.narration || '',
-            clickable: true
-          });
-          this.tourDayMarkers.push(mid);
-        }
-      }
-      // 画路线
-      if (pts.length >= 2) {
-        const colors: string[] = ['#E91E63','#2196F3','#4CAF50','#FF9800','#9C27B0'];
-        const pid: string = ms.addPolyline({ points: pts, color: colors[day.dayIndex % colors.length], width: 4 });
-        this.tourPolylines.push(pid);
-      }
-    }
-    // 聚焦到第一天
-    const allPts: LatLng[] = [];
-    for (const day of this.tourPlan.days) {
-      for (const poi of day.pois) {
-        if (poi.lat) allPts.push({ latitude: poi.lat, longitude: poi.lng });
-      }
-    }
-    if (allPts.length > 0) this.fitAllRoutes(allPts);
-  }
-
+  /** 根据两点间距选择导航模式：<2km步行，>=2km驾车 */
   /** 绘制当前选中天的 segment 标记（活动类型标记） */
   drawSegmentMarkers(): void {
     const ms = this.mapService;
@@ -1065,33 +1025,6 @@ export struct MapPage {
     } else if (reply.action === 'switch_day') {
       this.selectedDayIndex = reply.actionParam || 0;
       this.focusOnDayRoute(this.selectedDayIndex);
-    } else if (reply.action === 'tour_plan_ready' && reply.tourPlan) {
-      // 行程生成完成 → 显示在地图上
-      this.showTourPlan(reply.tourPlan);
-    } else if (reply.text.includes('开始导游')) {
-      this.startTourFromChat();
-    }
-  }
-
-  /** 在地图上展示行程 */
-  showTourPlan(plan: TourPlan): void {
-    this.tourActive = true;
-    this.tourPlan = plan;
-    this.tourGuide.startTour(plan);
-    this.tourGuide.onNarration((n: TourNarration) => { this.tourNarration = n; });
-    this.drawTourOnMap();
-    // 切换到游记模式显示
-    this.chatMessages.push({ role: 'ai',
-      content: `🗺️ 行程已加载到地图！点击右下角 🎙️ 按钮开始/停止导游。\n当前: ${plan.days[0]?.label || 'Day 1'}` });
-  }
-
-  /** 从聊天触发开始导游（已有行程时） */
-  startTourFromChat(): void {
-    if (this.tourPlan && !this.tourActive) {
-      this.tourActive = true;
-      this.tourGuide.startTour(this.tourPlan);
-      this.tourGuide.onNarration((n: TourNarration) => { this.tourNarration = n; });
-      this.drawTourOnMap();
     }
   }
 
@@ -1109,22 +1042,6 @@ export struct MapPage {
     AgentScheduler.getInstance().notifyMapReady(this.mapCenter.latitude, this.mapCenter.longitude);
   }
 
-  /** 切换导游模式 */
-  toggleTourMode(): void {
-    if (this.tourActive) {
-      this.tourActive = false;
-      this.tourGuide.stopTour();
-      this.tourNarration = null;
-      Logger.info(TAG, 'Tour mode deactivated');
-    } else {
-      this.tourActive = true;
-      this.tourGuide.onNarration((n: TourNarration) => {
-        this.tourNarration = n;
-      });
-      Logger.info(TAG, 'Tour mode activated');
-    }
-  }
-
   switchTab(index: number): void {
     if (index === this.currentTab) return;
     this.currentTab = index;
@@ -1137,6 +1054,227 @@ export struct MapPage {
       // 切换到推荐 tab 时触发一次立即刷新
       this.triggerRecommendRefresh();
     }
+  }
+
+  // ─── 导航功能 ───
+
+  /** 切换导航面板 */
+  toggleNavigation(): void {
+    if (this.showNavigation) {
+      this.showNavigation = false;
+      this.clearNavigationRoute();
+    } else {
+      // 设置起点为当前位置
+      this.navOriginLat = this.mapCenter.latitude;
+      this.navOriginLng = this.mapCenter.longitude;
+      this.navOriginName = '当前位置';
+      this.navRoute = null;
+      this.navSearchQuery = '';
+      this.navSearchResults = [];
+      this.showNavigation = true;
+    }
+  }
+
+  /** 地图点击选点（导航模式）— REST API 直连，不依赖 JS Bridge */
+  async navMapClickSelect(lat: number, lng: number): Promise<void> {
+    const poi: PoiResult = {
+      name: '地图选点',
+      type: '',
+      latitude: lat,
+      longitude: lng,
+      address: '',
+      distance: 0,
+      tel: '',
+    };
+
+    // REST API 获取地点名称
+    try {
+      const name: string = await AmapSearchService.getInstance().lookupNearestPlaceRest(lat, lng);
+      if (name && name.length > 0) {
+        poi.name = name;
+      }
+    } catch (_e) { /* 使用默认名称 */ }
+
+    this.navSelectDestination(poi);
+  }
+
+  /** 搜索目的地 — REST API 直连，不依赖 JS Bridge */
+  navSearchDestination(): void {
+    const query: string = this.navSearchQuery.trim();
+    if (!query || query.length === 0) return;
+    this.navIsSearching = true;
+    this.navSearchResults = [];
+
+    AmapSearchService.getInstance().nearbySearchRest(
+      query, this.mapCenter.latitude, this.mapCenter.longitude, 10000
+    ).then((results: PoiResult[]) => {
+      this.navSearchResults = results;
+      this.navIsSearching = false;
+    }).catch(() => {
+      this.navIsSearching = false;
+    });
+  }
+
+  /** 选择目的地并计算路线 — REST API 直连 */
+  async navSelectDestination(poi: PoiResult): Promise<void> {
+    this.navIsCalculating = true;
+    this.navRoute = null;
+    this.navSelectedStepIndex = -1;
+
+    try {
+      // REST API 路线计算（绕过 JS Bridge）
+      const route: NavRoute | null = await AmapSearchService.getInstance().directionRouteRest(
+        this.navOriginLat, this.navOriginLng,
+        poi.latitude, poi.longitude,
+        this.navMode
+      );
+      this.navRoute = route;
+      if (route) {
+        // 更新目的地名称
+        if (poi.name && poi.name.length > 0) {
+          route.destination = poi.name;
+        }
+        this.drawNavigationRoute(route);
+      }
+    } catch (e) {
+      Logger.warn(TAG, 'Navigation route calculation failed');
+    }
+    this.navIsCalculating = false;
+    this.navSearchResults = [];
+    this.navSearchQuery = poi.name;
+  }
+
+  /** 在地图上绘制导航路线 */
+  drawNavigationRoute(route: NavRoute): void {
+    const ms = this.mapService;
+    if (!ms) return;
+
+    // 清除之前的导航覆盖物
+    this.clearNavigationOverlays();
+
+    // 绘制路线折线
+    if (route.path.length > 0) {
+      this.navRoutePolylineId = ms.addPolyline({
+        points: route.path,
+        color: '#10B981',
+        width: 8,
+        zIndex: 55,
+        clickable: false,
+      });
+    }
+
+    // 起点标记（绿色圆点）
+    if (route.path.length > 0) {
+      this.navStartMarkerId = ms.addMarker({
+        position: route.path[0],
+        iconStyle: { color: '#10B981', size: 22 },
+        title: '起点',
+        zIndex: 60,
+      });
+    }
+
+    // 终点标记（红色圆点）
+    if (route.path.length > 0) {
+      const lastIdx: number = route.path.length - 1;
+      this.navEndMarkerId = ms.addMarker({
+        position: route.path[lastIdx],
+        iconStyle: { color: '#EF4444', size: 26 },
+        title: route.destination || '目的地',
+        zIndex: 60,
+      });
+    }
+
+    // 适配地图视野
+    if (route.path.length > 0) {
+      this.fitBounds(route.path);
+    }
+  }
+
+  /** 适配边界框 */
+  private fitBounds(pts: LatLng[]): void {
+    if (pts.length === 0) return;
+    let minLat: number = 90, maxLat: number = -90, minLng: number = 180, maxLng: number = -180;
+    for (const p of pts) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+    const bounds: LatLngBounds = {
+      southwest: { latitude: minLat, longitude: minLng },
+      northeast: { latitude: maxLat, longitude: maxLng },
+    };
+    try {
+      if (this.mapService) this.mapService.moveCameraBounds(bounds, 60);
+    } catch (e) { /* ignore */ }
+  }
+
+  /** 清除导航覆盖物（保留路线数据） */
+  clearNavigationOverlays(): void {
+    const ms = this.mapService;
+    if (!ms) return;
+    if (this.navRoutePolylineId) {
+      try { ms.removePolyline(this.navRoutePolylineId); } catch (e) { /* ignore */ }
+      this.navRoutePolylineId = '';
+    }
+    if (this.navStartMarkerId) {
+      try { ms.removeMarker(this.navStartMarkerId); } catch (e) { /* ignore */ }
+      this.navStartMarkerId = '';
+    }
+    if (this.navEndMarkerId) {
+      try { ms.removeMarker(this.navEndMarkerId); } catch (e) { /* ignore */ }
+      this.navEndMarkerId = '';
+    }
+  }
+
+  /** 清除导航（UI + 地图） */
+  clearNavigationRoute(): void {
+    this.clearNavigationOverlays();
+    this.navRoute = null;
+    this.navSearchResults = [];
+    this.navSearchQuery = '';
+    this.navSelectedStepIndex = -1;
+    this.navIsCalculating = false;
+  }
+
+  /** 构建出行方式选择按钮 */
+  @Builder
+  BuildNavModeBtn(emoji: string, label: string, mode: DirectionMode) {
+    Column() {
+      Text(emoji).fontSize(18)
+      Text(label).fontSize(9).fontColor(this.navMode === mode ? '#FFFFFF' : '#999')
+    }
+    .layoutWeight(1)
+    .padding({ top: 6, bottom: 6 })
+    .backgroundColor(this.navMode === mode ? '#10B981' : '#F5F5F5')
+    .borderRadius(12)
+    .onClick(() => { this.navMode = mode; })
+  }
+
+  /** 格式化距离显示 */
+  formatNavDistance(meters: number): string {
+    if (meters < 1000) return Math.floor(meters) + 'm';
+    return (meters / 1000).toFixed(1) + 'km';
+  }
+
+  /** 格式化时长显示 */
+  formatNavDuration(seconds: number): string {
+    if (seconds < 60) return Math.floor(seconds) + '秒';
+    if (seconds < 3600) return Math.floor(seconds / 60) + '分钟';
+    const h: number = Math.floor(seconds / 3600);
+    const m: number = Math.floor((seconds % 3600) / 60);
+    return h + 'h' + (m > 0 ? m + 'm' : '');
+  }
+
+  /** 导航步骤动作图标 */
+  navStepActionIcon(action: string): string {
+    if (action.includes('left') || action.includes('左转')) return '↰';
+    if (action.includes('right') || action.includes('右转')) return '↱';
+    if (action.includes('turn_around') || action.includes('掉头')) return '↶';
+    if (action.includes('arrive') || action.includes('到达')) return '🏁';
+    if (action.includes('transit') || action.includes('bus') || action.includes('地铁') || action.includes('railway')) return '🚌';
+    if (action.includes('walking') || action.includes('步行')) return '🚶';
+    return '↑';
   }
 
   private async triggerRecommendRefresh(): Promise<void> {
@@ -1296,17 +1434,17 @@ export struct MapPage {
           }
           .width('100%').padding({ right: 12 }).margin({ top: 176 })
 
-          // 导游浮钮 → 跳转导游 Tab
+          // 导航浮钮
           Row() {
             Blank()
             Column() {
-              Text('🗺️').fontSize(20)
-              Text('导游').fontSize(9).fontColor('#FFFFFF').margin({ top: 1 })
+              Text('🧭').fontSize(20)
+              Text('导航').fontSize(9).fontColor('#FFFFFF').margin({ top: 1 })
             }
             .width(48).height(48).borderRadius(24)
             .backgroundColor('#CC10B981').justifyContent(FlexAlign.Center)
             .shadow({ radius: 6, color: '#4010B981', offsetY: 2 })
-            .onClick(() => { this.currentTab = 5; })
+            .onClick(() => { this.toggleNavigation(); })
           }
           .width('100%').padding({ right: 12 }).margin({ top: 232 })
 
@@ -1421,25 +1559,166 @@ export struct MapPage {
             .position({ x: 0, y: 0 }).zIndex(101)
           }
 
-          // 导游讲解卡片覆盖层
-          if (this.tourActive) {
-            TourPanel({
-              narration: this.tourNarration,
-              onNext: () => {
-                const next: TourPoi | null = this.tourGuide.advanceToNext();
-                if (next) {
-                  this.tourNarration = {
-                    poi: next,
-                    text: next.narration || `下一站: ${next.name}`,
-                    show: true
-                  };
-                } else {
-                  this.tourNarration = null;
+          // 导航面板（底部弹出，不阻挡地图交互）
+          if (this.showNavigation) {
+            Column() {
+              Column() {
+                // 标题栏
+                Row() {
+                  Text('🧭 导航').fontSize(16).fontWeight(FontWeight.Bold)
+                  Blank()
+                  Text('✕').fontSize(18).fontColor('#999')
+                    .onClick(() => { this.showNavigation = false; this.clearNavigationRoute(); })
+                }.width('100%').margin({ bottom: 8 })
+
+                // 阶段 1: 目的地搜索 + 路线已显示
+                if (!this.navRoute) {
+                  // 搜索栏
+                  Row() {
+                    TextInput({ placeholder: '搜索目的地...', text: this.navSearchQuery })
+                      .fontSize(13).height(36).layoutWeight(1)
+                      .backgroundColor('#F5F5F5').borderRadius(18).padding({ left: 12, right: 12 })
+                      .onChange((v: string) => { this.navSearchQuery = v; })
+                    Button('搜索')
+                      .fontSize(12).height(36).padding({ left: 10, right: 10 })
+                      .backgroundColor('#10B981').borderRadius(18)
+                      .onClick(() => { this.navSearchDestination(); })
+                  }.width('100%').margin({ bottom: 6 })
+
+                  // 出行方式选择
+                  Row() {
+                    this.BuildNavModeBtn('🚗', '驾车', DirectionMode.DRIVING)
+                    this.BuildNavModeBtn('🚶', '步行', DirectionMode.WALKING)
+                    this.BuildNavModeBtn('🚌', '公交', DirectionMode.TRANSIT)
+                    this.BuildNavModeBtn('🚲', '骑行', DirectionMode.BICYCLING)
+                  }.width('100%').margin({ bottom: 6 })
+
+                  // 起点信息
+                  Row() {
+                    Text('📍').fontSize(14)
+                    Text(this.navOriginName).fontSize(12).fontColor('#666')
+                      .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                    Blank()
+                    Text('点击地图选点').fontSize(10).fontColor('#10B981')
+                  }.width('100%').padding(8).backgroundColor('#F0FDF4').borderRadius(8).margin({ bottom: 6 })
+
+                  // 加载指示器
+                  if (this.navIsSearching) {
+                    Row() {
+                      LoadingProgress().width(14).height(14).color('#10B981')
+                      Text('搜索中...').fontSize(12).fontColor('#10B981').margin({ left: 6 })
+                      Blank()
+                    }.width('100%').padding(6)
+                  }
+
+                  // 搜索结果
+                  if (this.navSearchResults.length > 0) {
+                    Scroll() {
+                      Column() {
+                        ForEach(this.navSearchResults, (poi: PoiResult) => {
+                          Row() {
+                            Column() {
+                              Text(poi.name).fontSize(14).fontColor('#222').maxLines(1)
+                                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                              Text(poi.address || '').fontSize(11).fontColor('#999').maxLines(1)
+                                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                            }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+                            Text(poi.distance > 0 ? (poi.distance < 1000 ? Math.floor(poi.distance) + 'm' : (poi.distance / 1000).toFixed(1) + 'km') : '')
+                              .fontSize(11).fontColor('#AAA').margin({ right: 4 })
+                            Text('→').fontSize(18).fontColor('#CCC')
+                          }
+                          .width('100%').padding({ top: 10, bottom: 10 })
+                          .border({ width: { bottom: 0.5 }, color: '#F0F0F0' })
+                          .onClick(() => { this.navSelectDestination(poi); })
+                        })
+                      }
+                    }.height(160).margin({ bottom: 8 })
+                  }
                 }
-              },
-              onClose: () => { this.tourNarration = null; }
-            })
+
+                // 阶段 2: 路线已显示
+                if (this.navRoute) {
+                  if (this.navIsCalculating) {
+                    Row() {
+                      LoadingProgress().width(14).height(14).color('#10B981')
+                      Text('路线计算中...').fontSize(12).fontColor('#10B981').margin({ left: 6 })
+                      Blank()
+                    }.width('100%').padding({ top: 4, bottom: 8 })
+                  }
+
+                  // 路线摘要
+                  Row() {
+                    Column() {
+                      Text(this.formatNavDistance(this.navRoute.distance))
+                        .fontSize(22).fontWeight(FontWeight.Bold).fontColor('#10B981')
+                      Text('距离').fontSize(10).fontColor('#999')
+                    }.layoutWeight(1)
+                    Column() {
+                      Text(this.formatNavDuration(this.navRoute.duration))
+                        .fontSize(22).fontWeight(FontWeight.Bold).fontColor('#10B981')
+                      Text('预计时间').fontSize(10).fontColor('#999')
+                    }.layoutWeight(1)
+                    Column() {
+                      Text(this.navRoute.steps.length.toString())
+                        .fontSize(22).fontWeight(FontWeight.Bold).fontColor('#10B981')
+                      Text('步骤').fontSize(10).fontColor('#999')
+                    }.layoutWeight(1)
+                  }.width('100%').padding(10).backgroundColor('#F0FDF4').borderRadius(10).margin({ bottom: 6 })
+
+                  // 起终点
+                  Text('🟢 ' + this.navOriginName + '  →  🔴 ' + (this.navRoute.destination || '目的地'))
+                    .fontSize(11).fontColor('#666').width('100%').margin({ bottom: 6 })
+                    .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+
+                  // 步骤列表
+                  Text('导航步骤').fontSize(12).fontWeight(FontWeight.Medium).fontColor('#333')
+                    .width('100%').margin({ bottom: 4 })
+                  Scroll() {
+                    Column() {
+                      ForEach(this.navRoute.steps, (step: NavStep, idx: number) => {
+                        Row() {
+                          Text(this.navStepActionIcon(step.action)).fontSize(16).width(24)
+                          Column() {
+                            Text(step.instruction || '继续前行').fontSize(12).fontColor('#333')
+                              .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+                            if (step.road && step.road.length > 0) {
+                              Text(step.road).fontSize(10).fontColor('#999')
+                            }
+                          }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+                          Text(step.distance > 0 ? (step.distance < 1000 ? Math.floor(step.distance) + 'm' : (step.distance / 1000).toFixed(1) + 'km') : '')
+                            .fontSize(10).fontColor('#AAA')
+                        }
+                        .width('100%').padding({ top: 6, bottom: 6 })
+                        .border({ width: { bottom: 0.5 }, color: '#F0F0F0' })
+                        .backgroundColor(this.navSelectedStepIndex === idx ? '#F0FDF4' : Color.Transparent)
+                        .borderRadius(6)
+                        .onClick(() => { this.navSelectedStepIndex = idx; })
+                      })
+                    }
+                  }.height(150).margin({ bottom: 6 })
+
+                  // 操作按钮
+                  Row() {
+                    Button('清除路线')
+                      .fontSize(12).height(34).layoutWeight(1)
+                      .backgroundColor('#F5F5F5').fontColor('#666').borderRadius(17)
+                      .onClick(() => { this.clearNavigationRoute(); })
+                    Button('换模式')
+                      .fontSize(12).height(34).layoutWeight(1)
+                      .backgroundColor('#F5F5F5').fontColor('#333').borderRadius(17)
+                      .onClick(() => { this.navRoute = null; })
+                      .margin({ left: 6, right: 6 })
+                  }.width('100%')
+                }
+              }
+              .padding(12).backgroundColor('#FFFFFF')
+              .borderRadius({ topLeft: 16, topRight: 16 })
+              .shadow({ radius: 8, color: '#20000000', offsetY: -2 })
+            }
+            .width('100%')
+            .position({ x: 0, y: '55%' }).zIndex(102)
           }
+
         }
         .width('100%').height('100%')
 
@@ -1456,26 +1735,6 @@ export struct MapPage {
         if (this.currentTab === 4) {
           SettingsContent({ onTabChange: (idx: number): void => { this.switchTab(idx); } })
         }
-        if (this.currentTab === 5) {
-          TourContent({
-            plan: this.tourPlan,
-            tourActive: this.tourActive,
-            onStart: () => {
-              if (this.tourPlan) {
-                this.tourActive = true;
-                this.tourGuide.startTour(this.tourPlan);
-                this.tourGuide.onNarration((n: TourNarration) => { this.tourNarration = n; });
-                this.drawTourOnMap();
-              }
-            },
-            onStop: () => {
-              this.tourActive = false;
-              this.tourGuide.stopTour();
-              this.tourNarration = null;
-            },
-            onTabChange: (idx: number): void => { this.switchTab(idx); }
-          })
-        }
       }
       .width('100%').layoutWeight(1)
 
@@ -1484,7 +1743,6 @@ export struct MapPage {
         this.BuildTab('📅', '时间线', 1)
         this.BuildTab('💡', '推荐', 2)
         this.BuildTab('📊', '报告', 3)
-        this.BuildTab('🗺️', '导游', 5)
         this.BuildTab('⚙️', '设置', 4)
       }
       .width('100%').height(54).backgroundColor('#FFFFFF')

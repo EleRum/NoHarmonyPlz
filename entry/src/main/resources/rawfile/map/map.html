@@ -17,7 +17,7 @@
 <script>
 (function() {
   var s = document.createElement('script');
-  s.src = 'https://webapi.amap.com/maps?v=2.0&key=bb0c1640992e6c7f2b1467498d8ae848&plugin=AMap.PlaceSearch,AMap.Geocoder,AMap.Geolocation';
+  s.src = 'https://webapi.amap.com/maps?v=2.0&key=bb0c1640992e6c7f2b1467498d8ae848&plugin=AMap.PlaceSearch,AMap.Geocoder,AMap.Geolocation,AMap.Driving,AMap.Walking,AMap.Transfer,AMap.Riding';
   s.onerror = function() { console.error('[FootMap] AMap CDN load FAILED'); };
   s.onload  = function() { console.log('[FootMap] AMap JSAPI loaded'); };
   document.head.appendChild(s);
@@ -252,6 +252,124 @@
     } else { map._myLocationMarker.setPosition(pos); }
   }
 
+  // ── 导航路线查询（支持 driving / walking / transit / bicycling，返回逐步导航数据）──
+  function mapGetDirectionRoute(fromLng, fromLat, toLng, toLat, mode, requestId) {
+    if (!map) {
+      sendToArkTS({ type: 'directionResult', requestId: requestId, route: null, error: 'Map not ready' });
+      return;
+    }
+
+    // 解析 polyline 字符串为路径点数组
+    function parsePolylinePath(polylineStr) {
+      var path = [];
+      if (!polylineStr) return path;
+      var pts = polylineStr.split(';');
+      for (var pi = 0; pi < pts.length; pi++) {
+        if (pts[pi]) {
+          var coord = pts[pi].split(',');
+          if (coord.length === 2) {
+            path.push({ lng: parseFloat(coord[0]), lat: parseFloat(coord[1]) });
+          }
+        }
+      }
+      return path;
+    }
+
+    // 从 AMap 步骤构建 NavStep 数组
+    function buildSteps(stepsArr) {
+      var steps = [];
+      for (var si = 0; si < stepsArr.length; si++) {
+        var s = stepsArr[si];
+        var stepPath = parsePolylinePath(s.polyline || '');
+        // Transit 模式：AMap.Transfer 的 segment 可能包含 busSegments（公交/地铁子步骤）
+        if (mode === 'transit' && s.busSegments && s.busSegments.length > 0) {
+          for (var bi = 0; bi < s.busSegments.length; bi++) {
+            var bus = s.busSegments[bi];
+            steps.push({
+              instruction: bus.instruction || '',
+              road: bus.road_name || '',
+              distance: bus.distance || 0,
+              duration: bus.time || 0,
+              orientation: bus.orientation || '',
+              action: bus.action || '',
+              path: parsePolylinePath(bus.path || '')
+            });
+          }
+        } else {
+          steps.push({
+            instruction: s.instruction || '',
+            road: s.road || '',
+            distance: s.distance || 0,
+            duration: s.time || 0,
+            orientation: s.orientation || '',
+            action: s.action || '',
+            path: stepPath
+          });
+        }
+      }
+      return steps;
+    }
+
+    // 执行搜索
+    var pluginName;
+    if (mode === 'walking') pluginName = 'Walking';
+    else if (mode === 'transit') pluginName = 'Transfer';
+    else if (mode === 'bicycling') pluginName = 'Riding';
+    else pluginName = 'Driving';
+
+    AMap.plugin('AMap.' + pluginName, function () {
+      var ds;
+      if (mode === 'walking') {
+        ds = new AMap.Walking({ extensions: 'all' });
+      } else if (mode === 'transit') {
+        ds = new AMap.Transfer({ city: '北京', policy: AMap.TransferPolicy.LEAST_TIME, extensions: 'all' });
+      } else if (mode === 'bicycling') {
+        ds = new AMap.Riding({ extensions: 'all' });
+      } else {
+        ds = new AMap.Driving({ policy: AMap.DrivingPolicy.LEAST_TIME, extensions: 'all' });
+      }
+
+      ds.search([fromLng, fromLat], [toLng, toLat], function (status, result) {
+        if (status === 'complete' && result.info === 'OK') {
+          var routes = result.routes;
+          var route = (routes && routes.length > 0) ? routes[0] : null;
+          if (!route) {
+            sendToArkTS({ type: 'directionResult', requestId: requestId, route: null, error: 'No route found' });
+            return;
+          }
+
+          // 构建完整路径
+          var fullPath = [];
+          var stepsArr = route.steps || [];
+          for (var si = 0; si < stepsArr.length; si++) {
+            var segPath = parsePolylinePath(stepsArr[si].polyline || '');
+            for (var pi = 0; pi < segPath.length; pi++) {
+              fullPath.push(segPath[pi]);
+            }
+          }
+
+          // 构建步骤数据
+          var steps = buildSteps(stepsArr);
+
+          sendToArkTS({
+            type: 'directionResult', requestId: requestId,
+            route: {
+              distance: route.distance || 0,
+              duration: route.time || 0,
+              path: fullPath,
+              origin: (result.origin && result.origin.name) ? result.origin.name : '',
+              destination: (result.destination && result.destination.name) ? result.destination.name : '',
+              steps: steps
+            },
+            error: null
+          });
+        } else {
+          sendToArkTS({ type: 'directionResult', requestId: requestId, route: null, error: result.info || 'Direction search failed' });
+        }
+      });
+    });
+  }
+
   function mapDestroy() {
     mapClearMarkers(); mapClearPolylines();
     if (map) { map.destroy(); map = null; }
@@ -270,6 +388,7 @@
     clearPolylines: mapClearPolylines,
     searchNearby: mapSearchNearby, lookupNearestPlace: mapLookupNearestPlace,
     setMyLocation: mapSetMyLocation, destroy: mapDestroy,
+    getDirectionRoute: mapGetDirectionRoute,
     isReady: function () { return mapReady; },
     _resendReady: resendReady
   };

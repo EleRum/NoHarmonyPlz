@@ -132,3 +132,55 @@ export interface BatchMarkerItem {
   title: string;
   iconStyle?: MarkerIconStyle;
 }
+
+/** 导航模式 */
+export enum DirectionMode {
+  DRIVING = 'driving',
+  WALKING = 'walking',
+  TRANSIT = 'transit',      // 公共交通
+  BICYCLING = 'bicycling',  // 骑行
+}
+
+/** 导航路线结果（基础，保持向后兼容） */
+export interface DirectionRoute {
+  /** 路线总距离（米） */
+  distance: number;
+  /** 路线预计时间（秒） */
+  duration: number;
+  /** 路线路径点序列 */
+  path: LatLng[];
+}
+
+/** 导航步骤 */
+export interface NavStep {
+  /** 导航指令文字（如"沿建国路向东行驶500米"） */
+  instruction: string;
+  /** 道路名称 */
+  road: string;
+  /** 本段距离（米） */
+  distance: number;
+  /** 本段耗时（秒） */
+  duration: number;
+  /** 方向（东/南/西/北/东北等） */
+  orientation: string;
+  /** 动作（左转/右转/直行/掉头/到达等） */
+  action: string;
+  /** 本段路径 */
+  path: LatLng[];
+}
+
+/** 完整导航路线（含步骤数据） */
+export interface NavRoute {
+  /** 路线总距离（米） */
+  distance: number;
+  /** 路线预计时间（秒） */
+  duration: number;
+  /** 完整路径 */
+  path: LatLng[];
+  /** 导航步骤列表 */
+  steps: NavStep[];
+  /** 起点名称 */
+  origin: string;
+  /** 终点名称 */
+  destination: string;
+}

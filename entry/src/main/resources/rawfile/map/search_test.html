@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Amap Search Test</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: sans-serif; padding: 16px; background: #f5f5f5; }
+  h2 { margin-bottom: 12px; }
+  input { padding: 8px 12px; font-size: 14px; border: 1px solid #ddd; border-radius: 8px; width: 200px; }
+  button { padding: 8px 16px; font-size: 14px; background: #10B981; color: #fff; border: none; border-radius: 8px; }
+  #log { margin-top: 16px; background: #1a1a2e; color: #0f0; font-family: monospace; font-size: 12px;
+         padding: 12px; border-radius: 8px; min-height: 200px; max-height: 400px; overflow-y: auto;
+         white-space: pre-wrap; word-break: break-all; }
+  .error { color: #ff4444; }
+  .info { color: #4dc9f6; }
+  .ok { color: #50C878; }
+  #status { padding: 8px; border-radius: 6px; margin-bottom: 8px; }
+  .loading { background: #FFF3CD; color: #856404; }
+  .ready { background: #D4EDDA; color: #155724; }
+  .fail { background: #F8D7DA; color: #721C24; }
+</style>
+</head>
+<body>
+<h2>🔍 Amap JSAPI Search Test</h2>
+<div id="status" class="loading">⏳ Loading Amap JSAPI...</div>
+<div>
+  <input id="kw" placeholder="搜索关键词" value="餐馆">
+  <button onclick="doSearch()">搜索</button>
+  <button onclick="doGeocode()" style="background:#3B82F6">逆地理</button>
+</div>
+<div id="log">等待 JSAPI 加载...</div>
+
+<script>
+var logEl = document.getElementById('log');
+var statusEl = document.getElementById('status');
+var placeSearch = null;
+var geocoder = null;
+var mapReady = false;
+
+function log(msg, cls) {
+  var line = '[' + new Date().toLocaleTimeString() + '] ' + msg + '\n';
+  logEl.textContent += line;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// 加载 Amap JSAPI
+(function() {
+  var s = document.createElement('script');
+  s.src = 'https://webapi.amap.com/maps?v=2.0&key=bb0c1640992e6c7f2b1467498d8ae848&plugin=AMap.PlaceSearch,AMap.Geocoder';
+  s.onerror = function() {
+    log('❌ CDN 加载失败!', 'error');
+    statusEl.className = 'fail';
+    statusEl.textContent = '❌ CDN 加载失败';
+  };
+  s.onload = function() {
+    log('✅ CDN 脚本加载完成，等待 AMap 对象就绪...', 'info');
+    waitForAMap();
+  };
+  document.head.appendChild(s);
+})();
+
+function waitForAMap() {
+  var tries = 0;
+  var timer = setInterval(function() {
+    tries++;
+    if (typeof AMap !== 'undefined') {
+      clearInterval(timer);
+      log('✅ AMap 对象就绪 (尝试 ' + tries + ' 次)', 'ok');
+      initPlugins();
+    } else if (tries >= 100) {
+      clearInterval(timer);
+      log('❌ AMap 对象超时', 'error');
+      statusEl.className = 'fail';
+      statusEl.textContent = '❌ AMap 加载超时';
+    }
+  }, 200);
+}
+
+function initPlugins() {
+  log('⏳ 加载 PlaceSearch + Geocoder 插件...', 'info');
+  AMap.plugin(['AMap.PlaceSearch', 'AMap.Geocoder'], function() {
+    placeSearch = new AMap.PlaceSearch({ pageSize: 10, pageIndex: 1 });
+    geocoder = new AMap.Geocoder();
+    mapReady = true;
+    log('✅ PlaceSearch + Geocoder 初始化完成', 'ok');
+    statusEl.className = 'ready';
+    statusEl.textContent = '✅ JSAPI Ready — 可以搜索';
+  });
+}
+
+function doSearch() {
+  var kw = document.getElementById('kw').value.trim();
+  if (!kw) { log('请输入关键词', 'error'); return; }
+  if (!placeSearch) { log('❌ PlaceSearch 未就绪', 'error'); return; }
+
+  log('🔍 周边搜索: "' + kw + '" @ 116.3974,39.9042 r=3000m', 'info');
+
+  placeSearch.searchNearBy(kw, [116.3974, 39.9042], 3000, function(status, result) {
+    log('📡 searchNearBy 回调: status=' + status + ' info=' + (result ? result.info : 'null'), 'info');
+
+    if (status === 'complete' && result.info === 'OK') {
+      var pois = (result.poiList && result.poiList.pois) || [];
+      log('✅ 搜索成功! 找到 ' + pois.length + ' 个 POI (共 ' + (result.poiList ? result.poiList.count : '?') + '):', 'ok');
+      for (var i = 0; i < Math.min(pois.length, 10); i++) {
+        var p = pois[i];
+        log('  ' + (i+1) + '. ' + p.name + ' | ' + (p.type||'') + ' | ' + (p.address||'') + ' | ' + (p.distance||0) + 'm', 'ok');
+      }
+      if (pois.length === 0) {
+        log('⚠️ 返回数据为空 — 检查 result 结构: ' + JSON.stringify(result).substring(0, 200), 'error');
+      }
+    } else {
+      log('❌ 搜索失败: ' + JSON.stringify(result).substring(0, 200), 'error');
+    }
+  });
+}
+
+function doGeocode() {
+  if (!geocoder) { log('❌ Geocoder 未就绪', 'error'); return; }
+  log('📍 逆地理编码: 116.3974,39.9042', 'info');
+  geocoder.getAddress([116.3974, 39.9042], function(status, result) {
+    log('📡 getAddress 回调: status=' + status + ' info=' + (result ? result.info : 'null'), 'info');
+    if (status === 'complete' && result.info === 'OK') {
+      var addr = result.regeocode;
+      log('✅ 地址: ' + addr.formattedAddress, 'ok');
+      var pois = addr.pois || [];
+      for (var i = 0; i < Math.min(pois.length, 5); i++) {
+        log('  ' + (i+1) + '. ' + pois[i].name + ' | ' + pois[i].type + ' | ' + pois[i].direction + ' ' + pois[i].distance + 'm', 'ok');
+      }
+    } else {
+      log('❌ 失败: ' + JSON.stringify(result).substring(0, 200), 'error');
+    }
+  });
+}
+</script>
+</body>
+</html>
