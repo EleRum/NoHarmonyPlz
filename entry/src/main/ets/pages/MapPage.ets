@@ -18,6 +18,7 @@ import { TimelineContent } from './TimelinePage';
 import { RecommendContent } from './RecommendPage';
 import { ReportContent } from './ReportPage';
 import { SettingsContent } from './SettingsPage';
+import { TourGuideContent } from './TourGuidePage';
 import { AgentScheduler } from '../services/AgentScheduler';
 import { RecommendationEngine } from '../services/RecommendationEngine';
 import { AmapSearchService } from '../services/map/AmapSearchService';
@@ -1735,6 +1736,9 @@ export struct MapPage {
         if (this.currentTab === 4) {
           SettingsContent({ onTabChange: (idx: number): void => { this.switchTab(idx); } })
         }
+        if (this.currentTab === 5) {
+          TourGuideContent()
+        }
       }
       .width('100%').layoutWeight(1)
 
@@ -1744,6 +1748,7 @@ export struct MapPage {
         this.BuildTab('💡', '推荐', 2)
         this.BuildTab('📊', '报告', 3)
         this.BuildTab('⚙️', '设置', 4)
+        this.BuildTab('🧭', '导游', 5)
       }
       .width('100%').height(54).backgroundColor('#FFFFFF')
       .border({ width: { top: 0.5 }, color: '#E8E8E8' })

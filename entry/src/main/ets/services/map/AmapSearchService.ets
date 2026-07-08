@@ -318,6 +318,54 @@ export class AmapSearchService {
   }
 
   /**
+   * 城市名转坐标（REST API）
+   */
+  async geocodeCity(cityName: string): Promise<LatLng | null> {
+    const url: string =
+      `https://restapi.amap.com/v3/geocode/geo?key=${AMAP_KEY}` +
+      `&address=${encodeURIComponent(cityName)}`;
+
+    try {
+      const bridge: PlatformBridge = PlatformBridge.getInstance();
+      const resp = await bridge.network.request(url, { method: 'GET' });
+      if (resp.responseCode === 200 && resp.result) {
+        const json = JSON.parse(resp.result) as Record<string, Object>;
+        const statusStr: string = json['status'] as string ?? '0';
+        if (statusStr === '1') {
+          const geocodes: Object[] = (json['geocodes'] as Object[]) ?? [];
+          if (geocodes.length > 0) {
+            const geo = geocodes[0] as Record<string, Object>;
+            const locStr: string = (geo['location'] as string) ?? '';
+            const parts: string[] = locStr.split(',');
+            if (parts.length === 2) {
+              return { latitude: parseFloat(parts[1]), longitude: parseFloat(parts[0]) } as LatLng;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      Logger.warn(TAG, 'REST geocode city error');
+    }
+    return null;
+  }
+
+  /**
+   * 搜索酒店（REST API）
+   */
+  async searchHotels(lat: number, lng: number): Promise<PoiResult[]> {
+    return this.nearbySearchRest('酒店|宾馆|民宿', lat, lng, 20000);
+  }
+
+  /**
+   * 按分类搜索 POI（REST API）
+   */
+  async searchPoiByCategory(
+    keywords: string, lat: number, lng: number, radius: number = 10000
+  ): Promise<PoiResult[]> {
+    return this.nearbySearchRest(keywords, lat, lng, radius);
+  }
+
+  /**
    * 从 POI 列表中选择最佳地名（过滤通用名）
    */
   private pickBestPlaceName(pois: NearbyPoi[]): string {

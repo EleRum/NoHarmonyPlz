@@ -204,6 +204,155 @@ export class ClaudeService {
     }
   }
 
+  /** 多轮对话（保留上下文，支持自定义 system prompt，更高 token 限制） */
+  async chatConversation(userMsg: string, systemPrompt: string): Promise<ClaudeReply> {
+    if (!this.hasKey) return { text: '请先设置AI密钥。' };
+
+    this.addToHistory('user', userMsg);
+
+    try {
+      const provider: string = ClaudeService.detectProvider(this.apiKey);
+      if (provider === 'claude') return await this.chatClaudeConv(systemPrompt);
+      if (provider === 'deepseek') return await this.chatDeepSeekConv(systemPrompt);
+      return await this.chatPanguConv(systemPrompt);
+    } catch (e) {
+      return { text: '' };
+    }
+  }
+
+  /** Claude 多轮对话（高 token 限制） */
+  private async chatClaudeConv(systemPrompt: string): Promise<ClaudeReply> {
+    try {
+      const messages: Object[] = [];
+      for (const h of this.history) {
+        const msgObj: Record<string, string> = {};
+        msgObj['role'] = h.role;
+        msgObj['content'] = h.content;
+        messages.push(msgObj);
+      }
+      const reqBody: Record<string, Object> = {};
+      reqBody['model'] = this.getModel('claude');
+      reqBody['max_tokens'] = 2048;
+      reqBody['system'] = systemPrompt;
+      reqBody['messages'] = messages;
+      const body: string = JSON.stringify(reqBody)!;
+      const bridge = PlatformBridge.getInstance();
+      const resp: HttpResponse = await bridge.network.request(this.getEndpoint('claude'), {
+        method: 'POST',
+        header: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.apiKey,
+          'anthropic-version': '2023-06-01'
+        },
+        body: body,
+        connectTimeout: 10000,
+        readTimeout: 30000
+      });
+      if (resp.responseCode === 200) {
+        const data: Record<string, Object> = JSON.parse(resp.result) as Record<string, Object>;
+        const content: Object[] = (data['content'] as Object[]) || [];
+        let text: string = '';
+        for (const c of content) {
+          const block = c as Record<string, Object>;
+          if (block['type'] === 'text') text += (block['text'] as string) || '';
+        }
+        this.addToHistory('assistant', text);
+        return { text };
+      }
+      return { text: '' };
+    } catch (e) {
+      return { text: '' };
+    }
+  }
+
+  /** DeepSeek 多轮对话 */
+  private async chatDeepSeekConv(systemPrompt: string): Promise<ClaudeReply> {
+    try {
+      const messages: Object[] = [];
+      const sysObj: Record<string, string> = {};
+      sysObj['role'] = 'system';
+      sysObj['content'] = systemPrompt;
+      messages.push(sysObj);
+      for (const h of this.history) {
+        const msgObj: Record<string, string> = {};
+        msgObj['role'] = h.role;
+        msgObj['content'] = h.content;
+        messages.push(msgObj);
+      }
+      const reqBody: Record<string, Object> = {};
+      reqBody['model'] = this.getModel('deepseek');
+      reqBody['max_tokens'] = 2048;
+      reqBody['messages'] = messages;
+      const body: string = JSON.stringify(reqBody)!;
+      const bridge = PlatformBridge.getInstance();
+      const resp: HttpResponse = await bridge.network.request(this.getEndpoint('deepseek'), {
+        method: 'POST',
+        header: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.apiKey },
+        body: body,
+        connectTimeout: 10000,
+        readTimeout: 30000
+      });
+      if (resp.responseCode === 200) {
+        const data: Record<string, Object> = JSON.parse(resp.result) as Record<string, Object>;
+        const choices: Object[] = (data['choices'] as Object[]) || [];
+        if (choices.length > 0) {
+          const choice = choices[0] as Record<string, Object>;
+          const msg = choice['message'] as Record<string, Object>;
+          const text: string = (msg['content'] as string) || '';
+          this.addToHistory('assistant', text);
+          return { text };
+        }
+      }
+      return { text: '' };
+    } catch (e) {
+      return { text: '' };
+    }
+  }
+
+  /** Pangu 多轮对话 */
+  private async chatPanguConv(systemPrompt: string): Promise<ClaudeReply> {
+    try {
+      const messages: Object[] = [];
+      for (const h of this.history) {
+        const msgObj: Record<string, string> = {};
+        msgObj['role'] = h.role === 'assistant' ? 'assistant' : 'user';
+        if (h.role === 'user' && messages.length === 0) {
+          msgObj['content'] = '[系统指令]\n' + systemPrompt + '\n\n[用户消息]\n' + h.content;
+        } else {
+          msgObj['content'] = h.content;
+        }
+        messages.push(msgObj);
+      }
+      const reqBody: Record<string, Object> = {};
+      reqBody['model'] = this.getModel('pangu');
+      reqBody['max_tokens'] = 2048;
+      reqBody['messages'] = messages;
+      const body: string = JSON.stringify(reqBody)!;
+      const bridge = PlatformBridge.getInstance();
+      const resp: HttpResponse = await bridge.network.request(this.getEndpoint('pangu'), {
+        method: 'POST',
+        header: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.apiKey },
+        body: body,
+        connectTimeout: 10000,
+        readTimeout: 30000
+      });
+      if (resp.responseCode === 200) {
+        const data: Record<string, Object> = JSON.parse(resp.result) as Record<string, Object>;
+        const choices: Object[] = (data['choices'] as Object[]) || [];
+        if (choices.length > 0) {
+          const choice = choices[0] as Record<string, Object>;
+          const msg = choice['message'] as Record<string, Object>;
+          const text: string = (msg['content'] as string) || '';
+          this.addToHistory('assistant', text);
+          return { text };
+        }
+      }
+      return { text: '' };
+    } catch (e) {
+      return { text: '' };
+    }
+  }
+
   async chat(msg: string, allSegs: ActivitySegment[], ctxInfo: string): Promise<ClaudeReply> {
     if (!this.hasKey) {
       return {
