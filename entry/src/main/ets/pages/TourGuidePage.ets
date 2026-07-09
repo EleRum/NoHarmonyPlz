@@ -13,6 +13,7 @@ import {
   LatLng, MapInitConfig, NavRoute, DirectionMode, PoiResult
 } from '../services/map/MapTypes';
 import { TourPlan, TourDay } from '../model/TourPlan';
+import { Dao } from '../database/Dao';
 
 const TAG = 'TourGuidePage';
 const DEFAULT_CENTER: LatLng = { latitude: 39.9042, longitude: 116.3974 };
@@ -24,10 +25,18 @@ interface ChatBubble {
 
 const ROUTE_COLORS: string[] = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4'];
 
+// 模块级持久化：翻页/退出不丢失
+class PlanState {
+  plan: TourPlan | null = null;
+  messages: ChatBubble[] = [];
+}
+const g_agent: TourGuideAgent = new TourGuideAgent();
+const g_planState: PlanState = new PlanState();
+
 @Component
 export struct TourGuideContent {
   private mapService: MapJsBridge | null = null;
-  private agent: TourGuideAgent = new TourGuideAgent();
+  private agent: TourGuideAgent = g_agent;
   @State mapCenter: LatLng = DEFAULT_CENTER;
   @State mapZoom: number = 12;
   @State isMapReady: boolean = false;
@@ -47,17 +56,48 @@ export struct TourGuideContent {
   private pendingToolCall: ToolCall | null = null;
   private markerPoiMap: Record<string, PoiResult> = {};
 
-  aboutToAppear(): void {
-    // 重置 Agent 状态，清理旧的会话历史和计划数据
-    this.agent.reset();
-    this.plan = null;
-    this.chatMessages = [
-      { role: 'ai', content: '你好！我是小途 🗺️\n想规划一次旅行吗？告诉我目的地和天数，我帮你安排！比如"想去成都玩3天"。' }
-    ];
-    // 清除地图上的旧数据
-    this.clearPlanOverlays();
-    this.clearCurrentMarkers();
-    this.selectedDayIndex = 0;
+  async aboutToAppear(): Promise<void> {
+    // 从内存恢复
+    this.plan = g_planState.plan;
+    this.chatMessages = g_planState.messages;
+
+    // 如果内存没有，从数据库恢复
+    if (!this.plan) {
+      try {
+        const dao = Dao.getInstance();
+        const saved = await dao.queryUserProfile('tour_plan');
+        if (saved && saved.preferenceValue) {
+          this.plan = JSON.parse(saved.preferenceValue) as TourPlan;
+          g_planState.plan = this.plan;
+        }
+        const savedChat = await dao.queryUserProfile('tour_chat');
+        if (savedChat && savedChat.preferenceValue) {
+          this.chatMessages = JSON.parse(savedChat.preferenceValue) as ChatBubble[];
+          g_planState.messages = this.chatMessages;
+        }
+      } catch (_e) { /* ignore */ }
+    }
+
+    if (this.chatMessages.length === 0) {
+      this.chatMessages = [
+        { role: 'ai', content: '你好！我是小途 🗺️\n想规划一次旅行吗？告诉我目的地和天数，我帮你安排！比如"想去成都玩3天"。' }
+      ];
+    }
+  }
+
+  private saveState(): void {
+    g_planState.plan = this.plan;
+    g_planState.messages = this.chatMessages;
+    // 持久化到数据库，杀进程后也能恢复
+    try {
+      const dao = Dao.getInstance();
+      if (this.plan && this.plan.dailyPlans.length > 0) {
+        dao.upsertUserProfile('tour_plan', JSON.stringify(this.plan), 1);
+      }
+      if (this.chatMessages.length > 0) {
+        dao.upsertUserProfile('tour_chat', JSON.stringify(this.chatMessages), 1);
+      }
+    } catch (_e) { /* ignore */ }
   }
 
   /** WebView 就绪 */
@@ -70,6 +110,10 @@ export struct TourGuideContent {
       onMapReady: (_err: Error | null): void => {
         this.isMapReady = true;
         Logger.info(TAG, 'Tour map ready');
+        // 从持久状态恢复计划时，重新绘制地图
+        if (this.plan && this.plan.dailyPlans.length > 0) {
+          this.drawPlanOnMap(this.plan);
+        }
       },
       onMarkerClick: (id: string, _lat: number, _lng: number, _title: string): void => {
         this.showPoiPopup(id);
@@ -89,7 +133,8 @@ export struct TourGuideContent {
 
     this.chatMessages.push({ role: 'user', content: input });
     this.chatInput = '';
-    this.quickReplies = []; // 发送后清除，等 AI 回复后重新设置
+    this.quickReplies = [];
+    this.saveState();
     this.isAiThinking = true;
 
     try {
@@ -143,6 +188,7 @@ export struct TourGuideContent {
       // 立即更新地图 — 不等 AI 回复
       if (resp.plan && resp.plan.dailyPlans.length > 0) {
         this.plan = resp.plan;
+        this.saveState();
         this.clearCurrentMarkers();
         this.drawPlanOnMap(resp.plan);
       }
@@ -524,6 +570,25 @@ export struct TourGuideContent {
         Row() {
           Text('🤖 小途 · 旅游规划师').fontSize(13).fontWeight(FontWeight.Bold)
           Blank()
+          if (this.plan && this.plan.dailyPlans.length > 0) {
+            Button('清空').fontSize(11).height(24).padding({ left: 8, right: 8 })
+              .backgroundColor('#FF5252').borderRadius(10)
+              .onClick(() => {
+                this.agent.reset();
+                this.plan = null;
+                this.chatMessages = [
+                  { role: 'ai', content: '你好！我是小途 🗺️\n想规划一次旅行吗？告诉我目的地和天数，我帮你安排！比如"想去成都玩3天"。' }
+                ];
+                this.saveState();
+                // 同时清除数据库中的持久化数据
+                try { Dao.getInstance().upsertUserProfile('tour_plan', '', 0); } catch (_e) { /* ignore */ }
+                try { Dao.getInstance().upsertUserProfile('tour_chat', '', 0); } catch (_e) { /* ignore */ }
+                this.clearPlanOverlays();
+                this.clearCurrentMarkers();
+                this.quickReplies = [];
+                this.selectedDayIndex = 0;
+              })
+          }
           if (this.isAiThinking) {
             LoadingProgress().width(14).height(14).color('#10B981')
           }

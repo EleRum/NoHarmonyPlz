@@ -131,6 +131,13 @@ export class TourGuideAgent {
   private detectModificationIntent(input: string): ToolCall | undefined {
     if (this.plan.dailyPlans.length === 0) return undefined;
 
+    // 模式: 改成/换成 X天 → 调整计划天数
+    const daysPattern = /(?:改[成为]?|换[成为]?|调整[成为]?|变成)([一二三四五六七八\d]+)天/;
+    const daysMatch: RegExpMatchArray | null = input.match(daysPattern);
+    if (daysMatch) {
+      return { action: 'make_plan', days: this.parseDayNumber(daysMatch[1]).toString() };
+    }
+
     // 模式: 去掉/删除 + 第X天 + 第N个 / POI名称
     const rmIdxPattern = /(?:去掉|删除|移除).*第([一二三四五六七八\d]+)天.*?第([一二三四五六七八\d]+)个/;
     const rmIdxMatch: RegExpMatchArray | null = input.match(rmIdxPattern);
@@ -423,19 +430,42 @@ export class TourGuideAgent {
           baseLng = this.plan.cityLng;
         }
 
-        this.plan.dailyPlans = [];
-        for (let d: number = 0; d < this.plan.days; d++) {
-          const pois: TourPoiItem[] = [
-            { name: baseName, lat: baseLat, lng: baseLng, type: '出发地', timeSlot: '出发', duration: '', note: '' },
-            { name: baseName, lat: baseLat, lng: baseLng, type: '出发地', timeSlot: '返回', duration: '', note: '' }
-          ];
-          this.plan.dailyPlans.push({ dayIndex: d, label: `第${d + 1}天`, pois: pois, route: null });
+        // 调整天数时保留已有的行程内容
+        const hadContent: boolean = this.plan.dailyPlans.length > 0;
+        while (this.plan.dailyPlans.length < this.plan.days) {
+          const nd: number = this.plan.dailyPlans.length;
+          this.plan.dailyPlans.push({
+            dayIndex: nd, label: `第${nd + 1}天`,
+            pois: [
+              { name: baseName, lat: baseLat, lng: baseLng, type: '出发地', timeSlot: '出发', duration: '', note: '' },
+              { name: baseName, lat: baseLat, lng: baseLng, type: '出发地', timeSlot: '返回', duration: '', note: '' }
+            ],
+            route: null
+          });
+        }
+        // 减少天数则截断，保留前 N 天
+        if (this.plan.dailyPlans.length > this.plan.days) {
+          this.plan.dailyPlans = this.plan.dailyPlans.slice(0, this.plan.days);
+        }
+        // 如果已有内容且换了酒店，更新已有天的起点终点
+        if (hadContent && hotelName && hotelLat !== 0) {
+          for (const day of this.plan.dailyPlans) {
+            for (const p of day.pois) {
+              if (p.timeSlot === '出发' || p.timeSlot === '返回') {
+                p.name = hotelName; p.lat = hotelLat; p.lng = hotelLng;
+                p.type = '酒店住宿'; p.note = '';
+              }
+            }
+          }
         }
         this.plan.status = 'complete';
 
-        resultText = `已创建${this.plan.days}天${this.plan.city}行程！` +
-          (hotelName ? `\n入住：${hotelName}` : '\n起点：' + baseName) +
-          `\n\n告诉我你想去哪玩？比如"第一天去宽窄巷子"、"第二天吃火锅"～`;
+        resultText = hadContent
+          ? `已调整为${this.plan.days}天行程，已有内容已保留！` +
+            (hotelName ? `\n入住：${hotelName}` : '')
+          : `已创建${this.plan.days}天${this.plan.city}行程！` +
+            (hotelName ? `\n入住：${hotelName}` : '\n起点：' + baseName) +
+            `\n\n告诉我你想去哪玩？比如"第一天去宽窄巷子"、"第二天吃火锅"～`;
         break;
       }
       case 'get_weather': {
