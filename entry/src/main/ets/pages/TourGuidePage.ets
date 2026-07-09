@@ -10,7 +10,7 @@ import { AmapSearchService } from '../services/map/AmapSearchService';
 import { MapEventCallbacks } from '../services/map/IMapService';
 import { MapJsBridge } from '../services/map/MapJsBridge';
 import {
-  LatLng, MapInitConfig, NavRoute, DirectionMode
+  LatLng, MapInitConfig, NavRoute, DirectionMode, PoiResult
 } from '../services/map/MapTypes';
 import { TourPlan, TourDay } from '../model/TourPlan';
 
@@ -36,14 +36,28 @@ export struct TourGuideContent {
   @State isAiThinking: boolean = false;
   @State plan: TourPlan | null = null;
   @State selectedDayIndex: number = 0;
+  @State showPoiDetail: boolean = false;
+  @State poiDetailName: string = '';
+  @State poiDetailAddr: string = '';
+  @State poiDetailInfo: string = '';
+  @State quickReplies: string[] = [];
+  private quickReplyPoiData: PoiResult[] = [];
   private dayPolylines: string[] = [];
   private dayMarkers: string[][] = [];
   private pendingToolCall: ToolCall | null = null;
+  private markerPoiMap: Record<string, PoiResult> = {};
 
   aboutToAppear(): void {
+    // 重置 Agent 状态，清理旧的会话历史和计划数据
+    this.agent.reset();
+    this.plan = null;
     this.chatMessages = [
       { role: 'ai', content: '你好！我是小途 🗺️\n想规划一次旅行吗？告诉我目的地和天数，我帮你安排！比如"想去成都玩3天"。' }
     ];
+    // 清除地图上的旧数据
+    this.clearPlanOverlays();
+    this.clearCurrentMarkers();
+    this.selectedDayIndex = 0;
   }
 
   /** WebView 就绪 */
@@ -56,6 +70,9 @@ export struct TourGuideContent {
       onMapReady: (_err: Error | null): void => {
         this.isMapReady = true;
         Logger.info(TAG, 'Tour map ready');
+      },
+      onMarkerClick: (id: string, _lat: number, _lng: number, _title: string): void => {
+        this.showPoiPopup(id);
       }
     };
     bridge.setEventCallbacks(callbacks);
@@ -72,6 +89,7 @@ export struct TourGuideContent {
 
     this.chatMessages.push({ role: 'user', content: input });
     this.chatInput = '';
+    this.quickReplies = []; // 发送后清除，等 AI 回复后重新设置
     this.isAiThinking = true;
 
     try {
@@ -97,50 +115,70 @@ export struct TourGuideContent {
     this.isAiThinking = false;
   }
 
-  /** 自动执行工具调用并继续对话 */
+  /** 自动执行工具调用并继续对话
+   *  第一阶段：执行工具 → 立即更新地图（不等待 AI）
+   *  第二阶段：询问 AI 下一步 → 继续链式调用 */
   async autoExecuteTool(toolCall: ToolCall): Promise<void> {
-    const params: Record<string, string> = {};
-    if (toolCall.keywords) params['keywords'] = toolCall.keywords;
-    if (toolCall.city) params['city'] = toolCall.city;
-    if (toolCall.hotel) params['hotel'] = toolCall.hotel;
-    if (toolCall.hotelLat) params['hotelLat'] = toolCall.hotelLat;
-    if (toolCall.hotelLng) params['hotelLng'] = toolCall.hotelLng;
+    try {
+      const params: Record<string, string> = {};
+      if (toolCall.keywords) params['keywords'] = toolCall.keywords;
+      if (toolCall.city) params['city'] = toolCall.city;
+      if (toolCall.hotel) params['hotel'] = toolCall.hotel;
+      if (toolCall.hotelLat) params['hotelLat'] = toolCall.hotelLat;
+      if (toolCall.hotelLng) params['hotelLng'] = toolCall.hotelLng;
+      if (toolCall.days) params['days'] = toolCall.days;
+      if (toolCall.dayIndex) params['dayIndex'] = toolCall.dayIndex;
+      if (toolCall.poiIndex) params['poiIndex'] = toolCall.poiIndex;
+      if (toolCall.name) params['name'] = toolCall.name;
+      if (toolCall.lat) params['lat'] = toolCall.lat;
+      if (toolCall.lng) params['lng'] = toolCall.lng;
+      if (toolCall.type) params['type'] = toolCall.type;
+      if (toolCall.timeSlot) params['timeSlot'] = toolCall.timeSlot;
+      if (toolCall.note) params['note'] = toolCall.note;
+      if (toolCall.mode) params['mode'] = toolCall.mode;
 
-    const resp: AgentResponse = await this.agent.executeToolAndContinue(toolCall.action, params);
+      // 第一阶段：执行工具（快速，不等待 AI）
+      const resp: AgentResponse = await this.agent.executeToolAndContinue(toolCall.action, params);
 
-    // 替换占位消息
-    if (this.chatMessages.length > 0) {
-      const last = this.chatMessages[this.chatMessages.length - 1];
-      if (last.content.includes('🔍')) {
-        this.chatMessages = this.chatMessages.slice(0, -1);
+      // 立即更新地图 — 不等 AI 回复
+      if (resp.plan && resp.plan.dailyPlans.length > 0) {
+        this.plan = resp.plan;
+        this.clearCurrentMarkers();
+        this.drawPlanOnMap(resp.plan);
       }
-    }
-    this.chatMessages.push({ role: 'ai', content: resp.text });
-
-    // 每步地图更新
-    if (this.isMapReady && this.mapService) {
-      // 移动地图
-      if (resp.mapCenter) {
-        this.mapCenter = resp.mapCenter;
-        this.mapService.moveCamera(resp.mapCenter, 13);
+      if (this.isMapReady && this.mapService) {
+        if (resp.mapCenter) {
+          this.mapCenter = resp.mapCenter;
+          this.mapService.moveCamera(resp.mapCenter, 13);
+        }
+        if (resp.markers && resp.markers.length > 0) {
+          this.showMarkersOnMap(resp.markers);
+        }
+        this.updateQuickReplies(resp.markers || [], toolCall.action);
       }
-      // 添加标记（酒店/POI）
-      if (resp.markers && resp.markers.length > 0) {
-        this.showMarkersOnMap(resp.markers);
+
+      // 第二阶段：询问 AI 下一步（可能较慢，但不阻塞地图更新）
+      const aiResp = await this.agent.askAiNextStep(toolCall.action, resp.text);
+      const nextTool: ToolCall | undefined = aiResp.toolCall;
+
+      // 替换占位消息并显示 AI 回复
+      if (this.chatMessages.length > 0) {
+        const last = this.chatMessages[this.chatMessages.length - 1];
+        if (last.content.includes('🔍')) {
+          this.chatMessages = this.chatMessages.slice(0, -1);
+        }
       }
-    }
+      this.chatMessages.push({ role: 'ai', content: aiResp.text });
 
-    // 完整计划
-    if (resp.plan && resp.plan.dailyPlans.length > 0) {
-      this.plan = resp.plan;
-      this.clearCurrentMarkers();
-      this.drawPlanOnMap(resp.plan);
-    }
-
-    // 继续下一工具
-    if (resp.toolCall) {
-      this.chatMessages.push({ role: 'ai', content: '🔍 ' + resp.toolCall.action + '...' });
-      await this.autoExecuteTool(resp.toolCall);
+      // 继续下一工具
+      if (nextTool) {
+        this.chatMessages.push({ role: 'ai', content: '🔍 ' + nextTool.action + '...' });
+        await this.autoExecuteTool(nextTool);
+      }
+    } catch (e) {
+      Logger.error(TAG, 'autoExecuteTool failed for %{public}s: %{public}s',
+        toolCall.action, JSON.stringify(e));
+      this.chatMessages.push({ role: 'ai', content: '😅 ' + toolCall.action + '执行出错，请再试一次。' });
     }
   }
 
@@ -156,10 +194,42 @@ export struct TourGuideContent {
         iconStyle: { color: '#10B981', size: 20, text: emoji },
         title: m.name,
         snippet: m.type,
-        clickable: false,
+        clickable: true,
         zIndex: 70,
       });
       this.tempMarkerIds.push(id);
+      this.markerPoiMap[id] = { name: m.name, type: m.type, latitude: m.lat, longitude: m.lng,
+        address: m.address || '', distance: 0, tel: '', id: m.poiId || '' } as PoiResult;
+    }
+  }
+
+  async showPoiPopup(markerId: string): Promise<void> {
+    const poi = this.markerPoiMap[markerId];
+    if (!poi) return;
+    this.poiDetailName = poi.name;
+    this.poiDetailAddr = poi.address || '';
+    this.poiDetailInfo = '';
+    this.showPoiDetail = true;
+
+    // 尝试获取详情（评分、电话等）
+    if (poi.id && poi.id.length > 0) {
+      try {
+        const detail = await AmapSearchService.getInstance().getPoiDetail(poi.id);
+        if (detail) {
+          const bizExt = detail['biz_ext'] as Record<string, Object> | undefined;
+          const deepInfo = detail['deep_info'] as Record<string, Object> | undefined;
+          const parts: string[] = [];
+          if (bizExt) {
+            const rating = bizExt['rating'] as string ?? '';
+            if (rating && rating.length > 0) parts.push('⭐' + rating);
+            const cost = bizExt['cost'] as string ?? '';
+            if (cost && cost.length > 0) parts.push('💰人均' + cost);
+          }
+          const tel = (detail['tel'] as string) ?? '';
+          if (tel && tel.length > 0) parts.push('📞' + tel);
+          this.poiDetailInfo = parts.join('  ');
+        }
+      } catch (_e) { /* ignore */ }
     }
   }
 
@@ -171,10 +241,59 @@ export struct TourGuideContent {
     this.tempMarkerIds = [];
   }
 
-  /** 在地图上绘制计划路线 */
+  /** 根据当前状态生成快捷回复 */
+  updateQuickReplies(markers: import('../services/TourGuideAgent').MapMarker[], action: string): void {
+    // 每次新消息都清除旧快捷回复，确保不残留
+    this.quickReplies = [];
+
+    // 搜索结果 → 显示前几个选项 + 换一批
+    if (action === 'search_hotels' || action === 'search_poi' || action === 'search_and_add') {
+      for (let i: number = 0; i < markers.length && i < 5; i++) {
+        this.quickReplies.push(markers[i].name);
+      }
+      if (this.quickReplies.length > 0) this.quickReplies.push('🔄 换一批');
+      return;
+    }
+
+    // 计划刚生成 → 引导添加景点
+    if (action === 'make_plan' && this.plan && this.plan.dailyPlans.length > 0) {
+      this.quickReplies = ['加景点', '加美食', '改酒店', '删景点'];
+      return;
+    }
+
+    // 添加完一个 POI 后 → 继续操作
+    if (action === 'search_and_add') {
+      this.quickReplies = ['再加一个', '换交通方式', '看看行程'];
+      return;
+    }
+
+    // 其他情况 → 通用操作
+    if (this.plan && this.plan.dailyPlans.length > 0) {
+      this.quickReplies = ['加景点', '加美食', '看看行程'];
+    }
+  }
+
+  /** 点击快捷回复 */
+  onQuickReply(reply: string): void {
+    if (reply === '🔄 换一批') {
+      this.chatInput = '换一批';
+      this.sendMessage();
+      return;
+    }
+    this.chatInput = reply;
+    this.sendMessage();
+  }
+
+  private drawGeneration: number = 0;
+
+  /** 在地图上绘制计划路线
+   *  标记立即显示，路线在后台计算完成后更新 */
   async drawPlanOnMap(plan: TourPlan): Promise<void> {
     const ms = this.mapService;
     if (!ms || !this.isMapReady) return;
+
+    // 递增代数，使之前未完成的 Phase 2 失效
+    const gen: number = ++this.drawGeneration;
 
     // 清除旧路线
     this.clearPlanOverlays();
@@ -185,13 +304,12 @@ export struct TourGuideContent {
       this.mapCenter = { latitude: plan.cityLat, longitude: plan.cityLng };
     }
 
-    // 为每天计算并绘制路线
+    // 第一阶段：立即添加所有 POI 标记
     for (let d: number = 0; d < plan.dailyPlans.length; d++) {
       const day: TourDay = plan.dailyPlans[d];
       const color: string = ROUTE_COLORS[d % ROUTE_COLORS.length];
       const markers: string[] = [];
 
-      // 添加 POI 标记
       for (const poi of day.pois) {
         const emoji: string = this.poiEmoji(poi.type);
         const markerId: string = ms.addMarker({
@@ -203,47 +321,68 @@ export struct TourGuideContent {
           zIndex: 60,
         });
         markers.push(markerId);
-      }
-
-      // 如果已有路线数据，直接绘制
-      if (day.route && day.route.path.length > 0) {
-        const polyId: string = ms.addPolyline({
-          points: day.route.path,
-          color: color,
-          width: 6,
-          zIndex: 50,
-          clickable: false,
-        });
-        this.dayPolylines.push(polyId);
-      } else if (day.pois.length >= 2) {
-        // 计算路线：串联所有 POI
-        const allPts: LatLng[] = [];
-        for (let pi: number = 0; pi < day.pois.length - 1; pi++) {
-          const a = day.pois[pi];
-          const b = day.pois[pi + 1];
-          try {
-            const route: NavRoute | null = await AmapSearchService.getInstance().directionRouteRest(
-              a.lat, a.lng, b.lat, b.lng, DirectionMode.DRIVING
-            );
-            if (route && route.path.length > 0) {
-              for (const pt of route.path) allPts.push(pt);
-            }
-          } catch (_e) { /* ignore */ }
-        }
-        if (allPts.length > 0) {
-          day.route = { distance: 0, duration: 0, path: allPts, steps: [], origin: '', destination: '' } as NavRoute;
-          const polyId: string = ms.addPolyline({
-            points: allPts, color: color, width: 6, zIndex: 50, clickable: false,
-          });
-          this.dayPolylines.push(polyId);
-        }
+        this.markerPoiMap[markerId] = {
+          name: poi.name, type: poi.type, latitude: poi.lat, longitude: poi.lng,
+          address: poi.note || '', distance: 0, tel: '', id: ''
+        } as PoiResult;
       }
       this.dayMarkers.push(markers);
+
+      if (day.route && day.route.path.length > 0) {
+        const polyId: string = ms.addPolyline({
+          points: day.route.path, color: color, width: 6, zIndex: 50, clickable: false,
+        });
+        this.dayPolylines.push(polyId);
+      } else {
+        this.dayPolylines.push('');
+      }
     }
 
-    // 默认显示第一天
     this.selectedDayIndex = 0;
     this.syncDayVisibility();
+
+    // 第二阶段：后台计算缺失的路线
+    for (let d: number = 0; d < plan.dailyPlans.length; d++) {
+      const day: TourDay = plan.dailyPlans[d];
+      if ((day.route && day.route.path.length > 0) || day.pois.length < 2) continue;
+
+      const color: string = ROUTE_COLORS[d % ROUTE_COLORS.length];
+      const allPts: LatLng[] = [];
+      for (let pi: number = 0; pi < day.pois.length - 1; pi++) {
+        const a = day.pois[pi];
+        const b = day.pois[pi + 1];
+        let route: NavRoute | null = null;
+        for (let retry: number = 0; retry < 5; retry++) {
+          try {
+            route = await AmapSearchService.getInstance().directionRouteRest(
+              a.lat, a.lng, b.lat, b.lng, DirectionMode.DRIVING
+            );
+            if (route && route.path.length > 0) break;
+          } catch (_e) { /* ignore */ }
+        }
+        if (route && route.path.length > 0) {
+          for (const pt of route.path) allPts.push(pt);
+        } else {
+          const fallbackA: LatLng = { latitude: a.lat, longitude: a.lng };
+          const fallbackB: LatLng = { latitude: b.lat, longitude: b.lng };
+          allPts.push(fallbackA);
+          allPts.push(fallbackB);
+        }
+      }
+      // 检查代数：如果期间有新绘制启动，放弃本次结果
+      if (gen !== this.drawGeneration) return;
+      if (allPts.length > 0) {
+        day.route = { distance: 0, duration: 0, path: allPts, steps: [], origin: '', destination: '' } as NavRoute;
+        if (this.dayPolylines[d] && this.dayPolylines[d].length > 0) {
+          try { ms.removePolyline(this.dayPolylines[d]); } catch (_e) { /* ignore */ }
+        }
+        const polyId: string = ms.addPolyline({
+          points: allPts, color: color, width: 6, zIndex: 50, clickable: false,
+        });
+        this.dayPolylines[d] = polyId;
+        try { ms.setPolylineVisible(polyId, d === this.selectedDayIndex); } catch (_e) { /* ignore */ }
+      }
+    }
   }
 
   /** 切换显示日 */
@@ -320,7 +459,7 @@ export struct TourGuideContent {
                     .backgroundColor(idx === this.selectedDayIndex ? '#10B981' : '#FFFFFF')
                     .borderRadius(12)
                     .onClick(() => { this.selectDay(idx); })
-                })
+                }, (day: TourDay, idx: number): string => `${idx}_${day.label}`)
               }
             }.scrollable(ScrollDirection.Horizontal)
           }
@@ -335,7 +474,7 @@ export struct TourGuideContent {
               .fontSize(13).fontWeight(FontWeight.Bold).margin({ bottom: 4 })
             Scroll() {
               Row() {
-                ForEach(this.plan.dailyPlans[this.selectedDayIndex].pois, (poi: import('../model/TourPlan').TourPoiItem) => {
+                ForEach(this.plan.dailyPlans[this.selectedDayIndex].pois, (poi: import('../model/TourPlan').TourPoiItem, pidx: number) => {
                   Column() {
                     Text(this.poiEmoji(poi.type)).fontSize(20)
                     Text(poi.name).fontSize(9).fontColor('#666').maxLines(1)
@@ -343,13 +482,39 @@ export struct TourGuideContent {
                     Text(poi.timeSlot).fontSize(8).fontColor('#999')
                   }
                   .width(72).padding(4).alignItems(HorizontalAlign.Center)
-                })
+                }, (poi: import('../model/TourPlan').TourPoiItem, pidx: number): string => `${pidx}_${poi.name}_${poi.timeSlot}`)
               }
             }.scrollable(ScrollDirection.Horizontal).height(64)
           }
           .width('90%').padding(8)
           .backgroundColor('#CCFFFFFF').borderRadius(12)
           .position({ x: '5%', y: 40 }).zIndex(10)
+        }
+
+        // POI 详情弹窗
+        if (this.showPoiDetail) {
+          Column() {
+            Row() {
+              Text(this.poiDetailName).fontSize(16).fontWeight(FontWeight.Bold)
+                .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+              Button('✕').fontSize(14).width(28).height(28)
+                .backgroundColor('#00000000').fontColor('#999')
+                .onClick(() => { this.showPoiDetail = false; })
+            }.width('100%')
+
+            if (this.poiDetailInfo.length > 0) {
+              Text(this.poiDetailInfo).fontSize(13).fontColor('#666').margin({ top: 4 })
+            }
+            if (this.poiDetailAddr.length > 0) {
+              Text('📍 ' + this.poiDetailAddr).fontSize(12).fontColor('#999').margin({ top: 2 })
+                .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+          }
+          .width('86%').padding(12)
+          .backgroundColor('#FFFFFF').borderRadius(14)
+          .shadow({ radius: 8, color: '#20000000', offsetY: 2 })
+          .position({ x: '7%', y: '60%' }).zIndex(20)
+          .onClick(() => { this.showPoiDetail = false; })
         }
       }
       .width('100%').layoutWeight(1)
@@ -383,6 +548,22 @@ export struct TourGuideContent {
             })
           }
         }.height(160).margin({ bottom: 4 })
+
+        if (this.quickReplies.length > 0) {
+          Scroll() {
+            Row() {
+              ForEach(this.quickReplies, (label: string) => {
+                Text(label)
+                  .fontSize(12).fontColor('#10B981')
+                  .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+                  .backgroundColor('#F0FDF4').borderRadius(14)
+                  .border({ width: 1, color: '#10B98140' })
+                  .margin({ right: 6 })
+                  .onClick(() => { this.onQuickReply(label); })
+              })
+            }.padding({ left: 4, right: 4 })
+          }.scrollable(ScrollDirection.Horizontal).height(36).margin({ bottom: 6 })
+        }
 
         Row() {
           TextInput({ placeholder: '告诉小途你的旅行计划...', text: this.chatInput })

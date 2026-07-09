@@ -82,7 +82,6 @@ interface ChatBubble {
 @Component
 export struct MapPage {
   private mapService: IMapService | null = null;
-  private hasDrawn: boolean = false;
   @State mapCenter: LatLng = DEFAULT_CENTER;
   @State mapZoom: number = 15;
   @State isMapReady: boolean = false;
@@ -701,8 +700,10 @@ export struct MapPage {
   async drawOnMap(): Promise<void> {
     const ms = this.mapService;
     if (!ms || this.dayRoutes.length === 0) return;
-    if (this.hasDrawn) return;
-    this.hasDrawn = true;
+
+    // 清除旧的路线和标记，确保重绘时数据一致
+    this.clearDayOverlays();
+
     try {
       const allPts: LatLng[] = [];
       for (let ri = 0; ri < this.dayRoutes.length; ri++) {
@@ -797,6 +798,36 @@ export struct MapPage {
     } catch (err) {
       Logger.warn(TAG, 'drawOnMap error');
     }
+  }
+
+  /** 清除日路线覆盖层（polyline + POI marker + segment marker），在重绘前调用 */
+  clearDayOverlays(): void {
+    const ms = this.mapService;
+    // 清除路线折线
+    for (const id of this.dayPolylines) {
+      if (id.length > 0 && ms) {
+        try { ms.removePolyline(id); } catch (e) {}
+      }
+    }
+    this.dayPolylines = [];
+    // 清除 POI 标记
+    for (const arr of this.dayPoiMarkers) {
+      for (const id of arr) {
+        if (ms) {
+          try { ms.removeMarker(id); } catch (e) {}
+        }
+      }
+    }
+    this.dayPoiMarkers = [];
+    // 清除 segment 标记
+    for (const arr of this.daySegMarkers) {
+      for (const id of arr) {
+        if (ms) {
+          try { ms.removeMarker(id); } catch (e) {}
+        }
+      }
+    }
+    this.daySegMarkers = [];
   }
 
   /** 清除所有 segment 标记，从地图上移除并清空列表 */

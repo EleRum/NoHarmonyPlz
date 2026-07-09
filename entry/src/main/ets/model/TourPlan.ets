@@ -16,6 +16,8 @@ export interface TourPoiItem {
   duration: string;
   /** 备注/推荐语 */
   note: string;
+  /** 到达此POI的交通方式: walking/driving/transit/bicycling，空=自动 */
+  mode?: string;
 }
 
 /** 一天行程 */

@@ -1,0 +1,1 @@
+- [计划路线不更新 Bug](plan-route-not-updating-bug.md) — ArkUI @State 对象引用不变导致 UI 不刷新 + hasDrawn 守卫阻止地图重绘

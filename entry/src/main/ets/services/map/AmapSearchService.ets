@@ -207,7 +207,8 @@ export class AmapSearchService {
   async directionRouteRest(
     fromLat: number, fromLng: number,
     toLat: number, toLng: number,
-    mode: DirectionMode
+    mode: DirectionMode,
+    city?: string
   ): Promise<NavRoute | null> {
     let type: string = 'driving';
     if (mode === DirectionMode.WALKING) type = 'walking';
@@ -220,9 +221,10 @@ export class AmapSearchService {
       `https://restapi.amap.com/v3/direction/${type}?key=${AMAP_KEY}` +
       `&origin=${origin}&destination=${dest}&extensions=all`;
 
-    // 公交需要 city 参数
+    // 公交需要 city + cityd 参数
     if (mode === DirectionMode.TRANSIT) {
-      url += `&city=北京`;
+      const cityName: string = city || '北京';
+      url += `&city=${encodeURIComponent(cityName)}&cityd=${encodeURIComponent(cityName)}`;
     }
 
     try {
@@ -260,29 +262,47 @@ export class AmapSearchService {
   private parseAmapRoute(route: Record<string, Object>, mode: DirectionMode): NavRoute {
     const distance: number = parseInt((route['distance'] as string) ?? '0');
     const duration: number = parseInt((route['duration'] as string) ?? '0');
-
-    // 解析步骤
-    const stepsRaw: Object[] = (route['steps'] as Object[]) ?? [];
     const steps: NavStep[] = [];
     const fullPath: LatLng[] = [];
 
-    for (let i: number = 0; i < stepsRaw.length; i++) {
-      const s = stepsRaw[i] as Record<string, Object>;
-      const polyline: string = (s['polyline'] as string) ?? '';
-      const stepPath: LatLng[] = this.parsePolyline(polyline);
-      for (const pt of stepPath) fullPath.push(pt);
-
-      const stepDistStr: string = (s['distance'] as string) ?? '0';
-      const stepDurStr: string = (s['duration'] as string) ?? '0';
-      steps.push({
-        instruction: (s['instruction'] as string) ?? '',
-        road: (s['road'] as string) ?? '',
-        distance: parseInt(stepDistStr),
-        duration: parseInt(stepDurStr),
-        orientation: (s['orientation'] as string) ?? '',
-        action: (s['action'] as string) ?? '',
-        path: stepPath,
-      } as NavStep);
+    if (mode === DirectionMode.TRANSIT) {
+      // 公交：路径在 segments[].walking/bus/subway.polyline 中
+      const segments: Object[] = (route['segments'] as Object[]) ?? [];
+      for (let i: number = 0; i < segments.length; i++) {
+        const seg = segments[i] as Record<string, Object>;
+        const walking = seg['walking'] as Record<string, Object> | undefined;
+        if (walking) {
+          const wpoly: string = (walking['polyline'] as string) ?? '';
+          for (const pt of this.parsePolyline(wpoly)) fullPath.push(pt);
+        }
+        const bus = seg['bus'] as Record<string, Object> | undefined;
+        if (bus) {
+          const bpoly: string = (bus['polyline'] as string) ?? '';
+          for (const pt of this.parsePolyline(bpoly)) fullPath.push(pt);
+        }
+        const subway = seg['subway'] as Record<string, Object> | undefined;
+        if (subway) {
+          const spoly: string = (subway['polyline'] as string) ?? '';
+          for (const pt of this.parsePolyline(spoly)) fullPath.push(pt);
+        }
+      }
+    } else {
+      const stepsRaw: Object[] = (route['steps'] as Object[]) ?? [];
+      for (let i: number = 0; i < stepsRaw.length; i++) {
+        const s = stepsRaw[i] as Record<string, Object>;
+        const polyline: string = (s['polyline'] as string) ?? '';
+        const stepPath: LatLng[] = this.parsePolyline(polyline);
+        for (const pt of stepPath) fullPath.push(pt);
+        steps.push({
+          instruction: (s['instruction'] as string) ?? '',
+          road: (s['road'] as string) ?? '',
+          distance: parseInt((s['distance'] as string) ?? '0'),
+          duration: parseInt((s['duration'] as string) ?? '0'),
+          orientation: (s['orientation'] as string) ?? '',
+          action: (s['action'] as string) ?? '',
+          path: stepPath,
+        } as NavStep);
+      }
     }
 
     return {
@@ -363,6 +383,76 @@ export class AmapSearchService {
     keywords: string, lat: number, lng: number, radius: number = 10000
   ): Promise<PoiResult[]> {
     return this.nearbySearchRest(keywords, lat, lng, radius);
+  }
+
+  /**
+   * 全文搜索 POI — 全城搜索，按相关性排序，不局限在某个坐标周围
+   */
+  async searchPoiByText(keywords: string, city: string): Promise<PoiResult[]> {
+    // 尝试多种城市名格式
+    const cityFormats: string[] = [city, city + '市'];
+    if (city.endsWith('市')) cityFormats.unshift(city.replace('市', ''));
+
+    for (const cityFmt of cityFormats) {
+      const url: string =
+        `https://restapi.amap.com/v3/place/text?key=${AMAP_KEY}` +
+        `&keywords=${encodeURIComponent(keywords)}&city=${encodeURIComponent(cityFmt)}&offset=20`;
+      try {
+        const bridge: PlatformBridge = PlatformBridge.getInstance();
+        const resp = await bridge.network.request(url, { method: 'GET' });
+        if (resp.responseCode === 200 && resp.result) {
+          const json = JSON.parse(resp.result) as Record<string, Object>;
+          if ((json['status'] as string) === '1' && json['pois']) {
+            const poisRaw: Object[] = json['pois'] as Object[];
+            if (poisRaw.length > 0) {
+              const results: PoiResult[] = [];
+              for (let i: number = 0; i < poisRaw.length; i++) {
+                const poi = poisRaw[i] as Record<string, Object>;
+                const locStr: string = (poi['location'] as string) ?? '';
+                const locParts: string[] = locStr.split(',');
+                results.push({
+                  name: (poi['name'] as string) ?? '',
+                  type: (poi['type'] as string) ?? '',
+                  latitude: locParts.length === 2 ? parseFloat(locParts[1]) : 0,
+                  longitude: locParts.length === 2 ? parseFloat(locParts[0]) : 0,
+                  address: (poi['address'] as string) ?? '',
+                  distance: 0,
+                  tel: (poi['tel'] as string) ?? '',
+                  id: (poi['id'] as string) ?? '',
+                } as PoiResult);
+              }
+              Logger.info(TAG, 'Text search "%{public}s" in "%{public}s": %{public}d results', keywords, cityFmt, results.length);
+              return results;
+            }
+          }
+        }
+      } catch (e) {
+        Logger.warn(TAG, 'Text search failed for "%{public}s": %{public}s', cityFmt, JSON.stringify(e));
+      }
+    }
+    Logger.warn(TAG, 'Text search returned no results for "%{public}s"', keywords);
+    return [];
+  }
+
+  /**
+   * POI 详情（REST API）— 获取评分、均价、电话等扩展信息
+   */
+  async getPoiDetail(id: string): Promise<Record<string, Object> | null> {
+    if (!id || id.length === 0) return null;
+    const url: string =
+      `https://restapi.amap.com/v3/place/detail?key=${AMAP_KEY}&id=${encodeURIComponent(id)}`;
+    try {
+      const bridge: PlatformBridge = PlatformBridge.getInstance();
+      const resp = await bridge.network.request(url, { method: 'GET' });
+      if (resp.responseCode === 200 && resp.result) {
+        const json = JSON.parse(resp.result) as Record<string, Object>;
+        if ((json['status'] as string) === '1' && json['pois']) {
+          const pois = json['pois'] as Object[];
+          if (pois.length > 0) return pois[0] as Record<string, Object>;
+        }
+      }
+    } catch (e) { /* ignore */ }
+    return null;
   }
 
   /**
