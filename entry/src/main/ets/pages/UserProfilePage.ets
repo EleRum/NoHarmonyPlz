@@ -216,7 +216,7 @@ export struct UserProfilePage {
             .margin({ top: 12, bottom: 6 })
             .width('100%')
             TextInput({ placeholder: '请输入你的昵称', text: this.username })
-              .fontSize(14).width('100%').height(44)
+              .fontSize(14).width('100%').height(44).placeholderColor(getTheme(this.themeMode).textTertiary)
               .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
               .padding({ left: 12, right: 12 })
               .onChange((v: string) => { this.username = v; })
@@ -238,7 +238,7 @@ export struct UserProfilePage {
             this.FieldLabel('居住城市')
             Row() {
               TextInput({ placeholder: '请输入城市名', text: this.city })
-                .fontSize(14).height(44).layoutWeight(1)
+                .fontSize(14).height(44).layoutWeight(1).placeholderColor(getTheme(this.themeMode).textTertiary)
                 .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
                 .padding({ left: 12, right: 12 })
                 .onChange((v: string) => { this.city = v; })

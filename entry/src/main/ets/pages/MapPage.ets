@@ -1469,7 +1469,8 @@ export struct MapPage {
     }
     .layoutWeight(1)
     .padding({ top: 6, bottom: 6 })
-    .backgroundColor(this.navMode === mode ? '#10B981' : '#F5F5F5')
+    .backgroundColor(this.navMode === mode ? '#10B981' : getTheme(this.themeMode).surfaceSecondary)
+    .border({ width: 1, color: this.navMode === mode ? '#10B981' : getTheme(this.themeMode).border })
     .borderRadius(12)
     .onClick(() => { this.navMode = mode; })
   }
@@ -1783,7 +1784,7 @@ export struct MapPage {
 
                 Row() {
                   TextInput({ placeholder: '输入指令...', text: this.chatInput })
-                    .fontSize(13).height(36).layoutWeight(1)
+                    .fontSize(13).height(36).layoutWeight(1).placeholderColor(getTheme(this.themeMode).textTertiary)
                     .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(18).padding({ left: 12, right: 12 })
                     .onChange((v: string) => { this.chatInput = v; })
                   Button('发送')
@@ -1816,7 +1817,7 @@ export struct MapPage {
                 if (!this.navRoute) {
                   // 搜索栏
                   Row() {
-                    TextInput({ placeholder: '搜索目的地...', text: this.navSearchQuery })
+                    TextInput({ placeholder: '搜索目的地...', text: this.navSearchQuery }).placeholderColor(getTheme(this.themeMode).textTertiary)
                       .fontSize(13).height(36).layoutWeight(1)
                       .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(18).padding({ left: 12, right: 12 })
                       .onChange((v: string) => { this.navSearchQuery = v; })

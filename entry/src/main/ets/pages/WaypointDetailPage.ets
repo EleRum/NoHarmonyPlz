@@ -421,7 +421,8 @@ struct WaypointDetailPage {
                   Text(opt.label).fontSize(10).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 2 })
                 }
                 .layoutWeight(1).padding({ top: 10, bottom: 10 })
-                .backgroundColor(opt.type === this.displayActivityTag ? '#EBF3FF' : '#F5F6F8')
+                .backgroundColor(opt.type === this.displayActivityTag ? '#EBF3FF' : getTheme(this.themeMode).surfaceSecondary)
+                .border({ width: 1, color: opt.type === this.displayActivityTag ? '#3B82F6' : getTheme(this.themeMode).border })
                 .borderRadius(10).margin({ left: 2, right: 2 })
                 .onClick(() => { this.doCalibrateType(opt.type); })
               })
@@ -434,7 +435,8 @@ struct WaypointDetailPage {
                   Text(opt.label).fontSize(10).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 2 })
                 }
                 .layoutWeight(1).padding({ top: 10, bottom: 10 })
-                .backgroundColor(opt.type === this.displayActivityTag ? '#EBF3FF' : '#F5F6F8')
+                .backgroundColor(opt.type === this.displayActivityTag ? '#EBF3FF' : getTheme(this.themeMode).surfaceSecondary)
+                .border({ width: 1, color: opt.type === this.displayActivityTag ? '#3B82F6' : getTheme(this.themeMode).border })
                 .borderRadius(10).margin({ left: 2, right: 2 })
                 .onClick(() => { this.doCalibrateType(opt.type); })
               })
@@ -482,7 +484,7 @@ struct WaypointDetailPage {
             Text('修改地点名称').fontSize(16).fontWeight(FontWeight.Medium).fontColor(getTheme(this.themeMode).textPrimary)
               .width('100%').textAlign(TextAlign.Center).padding({ top: 16, bottom: 12 })
             TextInput({ placeholder: '输入新名称', text: this.editPoiName })
-              .fontSize(14).height(44).width('100%')
+              .fontSize(14).placeholderColor(getTheme(this.themeMode).textTertiary).height(44).width('100%')
               .backgroundColor(getTheme(this.themeMode).pageBg).borderRadius(8)
               .onChange((value: string) => { this.editPoiName = value; })
             Row() {

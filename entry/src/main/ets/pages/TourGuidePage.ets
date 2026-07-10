@@ -646,7 +646,7 @@ export struct TourGuideContent {
 
         Row() {
           TextInput({ placeholder: '告诉小途你的旅行计划...', text: this.chatInput })
-            .fontSize(13).height(34).layoutWeight(1)
+            .fontSize(13).placeholderColor(getTheme(this.themeMode).textTertiary).height(34).layoutWeight(1)
             .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(17).padding({ left: 12, right: 12 })
             .onChange((v: string) => { this.chatInput = v; })
           Button('发送')

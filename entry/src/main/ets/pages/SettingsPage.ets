@@ -259,7 +259,8 @@ export struct SettingsContent {
                     .margin({ top: 2 })
                 }
                 .width('31%').height(52).borderRadius(8)
-                .backgroundColor(this.selectedProvider === opt.key ? '#3B82F6' : '#F0F1F3')
+                .backgroundColor(this.selectedProvider === opt.key ? '#3B82F6' : getTheme(this.themeMode).surfaceSecondary)
+                .border({ width: 1, color: this.selectedProvider === opt.key ? '#3B82F6' : getTheme(this.themeMode).border })
                 .justifyContent(FlexAlign.Center)
                 .onClick(() => { this.onChangeProvider(opt.key); })
                 .margin({ right: 8 })
@@ -270,7 +271,7 @@ export struct SettingsContent {
             // ─── 密钥输入 ───
             TextInput({ placeholder: '输入密钥 ' + this.getDefault().prefixHint, text: this.apiKey })
               .type(this.showKey ? InputType.Normal : InputType.Password)
-              .fontSize(14).fontColor(getTheme(this.themeMode).textPrimary).width('100%').height(44)
+              .fontSize(14).fontColor(getTheme(this.themeMode).textPrimary).width('100%').height(44).placeholderColor(getTheme(this.themeMode).textTertiary)
               .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
               .padding({ left: 12, right: 36 })
               .onChange((value: string) => { this.apiKey = value; })
@@ -281,7 +282,7 @@ export struct SettingsContent {
               .fontSize(13).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 6 }).width('100%')
 
             TextInput({ placeholder: this.getDefault().defaultEndpoint, text: this.customEndpoint })
-              .fontSize(13).fontColor(getTheme(this.themeMode).textPrimary).width('100%').height(40)
+              .fontSize(13).fontColor(getTheme(this.themeMode).textPrimary).width('100%').height(40).placeholderColor(getTheme(this.themeMode).textTertiary)
               .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
               .padding({ left: 12, right: 12 })
               .onChange((value: string) => { this.customEndpoint = value; })
@@ -290,7 +291,7 @@ export struct SettingsContent {
               .fontSize(12).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 6, bottom: 4 }).width('100%')
 
             TextInput({ placeholder: this.getDefault().defaultModel, text: this.customModel })
-              .fontSize(13).fontColor(getTheme(this.themeMode).textPrimary).width('100%').height(40)
+              .fontSize(13).fontColor(getTheme(this.themeMode).textPrimary).placeholderColor(getTheme(this.themeMode).textTertiary).width('100%').height(40)
               .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
               .padding({ left: 12, right: 12 })
               .onChange((value: string) => { this.customModel = value; })
