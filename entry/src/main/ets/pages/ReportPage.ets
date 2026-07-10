@@ -23,6 +23,7 @@ interface DailyStats {
 
 @Component
 export struct ReportContent {
+  @StorageLink('theme_is_dark') themeMode: string = 'light';
   onTabChange: (index: number) => void = () => {};
   @State todayStats: DailyStats | null = null;
   @State weekStats: DailyStats[] = [];
@@ -111,7 +112,7 @@ export struct ReportContent {
       if (this.isLoading) {
         Column() {
           LoadingProgress().width(36).height(36)
-          Text('生成报告中...').fontSize(14).fontColor(getTheme().textSecondary).margin({ top: 12 })
+          Text('生成报告中...').fontSize(14).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 12 })
         }
         .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
       } else {
@@ -122,22 +123,22 @@ export struct ReportContent {
               Column() {
                 Text(`${this.totalFootprints}`)
                   .fontSize(28).fontWeight(FontWeight.Bold).fontColor('#4A90D9')
-                Text('总足迹点').fontSize(12).fontColor(getTheme().textSecondary)
+                Text('总足迹点').fontSize(12).fontColor(getTheme(this.themeMode).textSecondary)
               }.layoutWeight(1)
 
               Column() {
                 Text(`${this.totalSegments}`)
                   .fontSize(28).fontWeight(FontWeight.Bold).fontColor('#50C878')
-                Text('活动片段').fontSize(12).fontColor(getTheme().textSecondary)
+                Text('活动片段').fontSize(12).fontColor(getTheme(this.themeMode).textSecondary)
               }.layoutWeight(1)
 
               Column() {
                 Text(`${this.weekStats.length}`)
                   .fontSize(28).fontWeight(FontWeight.Bold).fontColor('#FF6B6B')
-                Text('活跃天数').fontSize(12).fontColor(getTheme().textSecondary)
+                Text('活跃天数').fontSize(12).fontColor(getTheme(this.themeMode).textSecondary)
               }.layoutWeight(1)
             }
-            .width('90%').padding(20).backgroundColor(getTheme().surface)
+            .width('90%').padding(20).backgroundColor(getTheme(this.themeMode).surface)
             .borderRadius(12).margin({ top: 8, bottom: 8 })
             .shadow({ radius: 4, color: '#10000000', offsetY: 2 })
 
@@ -151,30 +152,30 @@ export struct ReportContent {
               if (this.todayStats) {
                 Row() {
                   Column() {
-                    Text('足迹点').fontSize(11).fontColor(getTheme().textSecondary)
+                    Text('足迹点').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary)
                     Text(`${this.todayStats.footprintCount}`)
-                      .fontSize(20).fontWeight(FontWeight.Bold).fontColor(getTheme().textPrimary)
+                      .fontSize(20).fontWeight(FontWeight.Bold).fontColor(getTheme(this.themeMode).textPrimary)
                   }.layoutWeight(1).alignItems(HorizontalAlign.Center)
 
                   Column() {
-                    Text('主要活动').fontSize(11).fontColor(getTheme().textSecondary)
+                    Text('主要活动').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary)
                     Text(this.todayStats.topActivity)
-                      .fontSize(14).fontWeight(FontWeight.Medium).fontColor(getTheme().textPrimary)
+                      .fontSize(14).fontWeight(FontWeight.Medium).fontColor(getTheme(this.themeMode).textPrimary)
                   }.layoutWeight(1).alignItems(HorizontalAlign.Center)
 
                   Column() {
-                    Text('主要地点').fontSize(11).fontColor(getTheme().textSecondary)
+                    Text('主要地点').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary)
                     Text(this.todayStats.topPlace)
-                      .fontSize(14).fontWeight(FontWeight.Medium).fontColor(getTheme().textPrimary)
+                      .fontSize(14).fontWeight(FontWeight.Medium).fontColor(getTheme(this.themeMode).textPrimary)
                       .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                   }.layoutWeight(1).alignItems(HorizontalAlign.Center)
                 }
                 .width('100%')
               } else {
-                Text('暂无今日数据').fontSize(13).fontColor(getTheme().textTertiary)
+                Text('暂无今日数据').fontSize(13).fontColor(getTheme(this.themeMode).textTertiary)
               }
             }
-            .width('90%').padding(16).backgroundColor(getTheme().surface)
+            .width('90%').padding(16).backgroundColor(getTheme(this.themeMode).surface)
             .borderRadius(12).margin({ top: 4, bottom: 8 })
             .shadow({ radius: 4, color: '#10000000', offsetY: 2 })
 
@@ -188,7 +189,7 @@ export struct ReportContent {
               if (this.weekStats.length > 0) {
                 ForEach(this.weekStats, (day: DailyStats) => {
                   Row() {
-                    Text(day.label).fontSize(13).fontColor(getTheme().textPrimary).width(48)
+                    Text(day.label).fontSize(13).fontColor(getTheme(this.themeMode).textPrimary).width(48)
                     // 简易进度条
                     Row() {
                       Row() {}.width(`${Math.min(100, day.footprintCount * 5)}%`)
@@ -198,17 +199,17 @@ export struct ReportContent {
                     .margin({ left: 8, right: 8 })
 
                     Text(`${day.topActivity}`)
-                      .fontSize(12).fontColor(getTheme().textSecondary).layoutWeight(1)
-                    Text(`${day.footprintCount}点`).fontSize(12).fontColor(getTheme().textSecondary)
+                      .fontSize(12).fontColor(getTheme(this.themeMode).textSecondary).layoutWeight(1)
+                    Text(`${day.footprintCount}点`).fontSize(12).fontColor(getTheme(this.themeMode).textSecondary)
                   }
                   .width('100%').padding({ top: 6, bottom: 6 })
                   .alignItems(VerticalAlign.Center)
                 })
               } else {
-                Text('暂无本周数据').fontSize(13).fontColor(getTheme().textTertiary)
+                Text('暂无本周数据').fontSize(13).fontColor(getTheme(this.themeMode).textTertiary)
               }
             }
-            .width('90%').padding(16).backgroundColor(getTheme().surface)
+            .width('90%').padding(16).backgroundColor(getTheme(this.themeMode).surface)
             .borderRadius(12).margin({ top: 4, bottom: 8 })
             .shadow({ radius: 4, color: '#10000000', offsetY: 2 })
 
@@ -221,9 +222,9 @@ export struct ReportContent {
               Text(this.totalFootprints > 0
                 ? '根据您的出行数据，您的生活规律正在被 Agent 学习中。随着数据积累，这里将自动生成每周行为总结和出行建议。'
                 : '还没有足够的出行数据，开启后台定位后，系统将在每晚自动生成行程摘要。')
-                .fontSize(13).fontColor(getTheme().textSecondary).lineHeight(20)
+                .fontSize(13).fontColor(getTheme(this.themeMode).textSecondary).lineHeight(20)
             }
-            .width('90%').padding(16).backgroundColor(getTheme().surface)
+            .width('90%').padding(16).backgroundColor(getTheme(this.themeMode).surface)
             .borderRadius(12).margin({ top: 4, bottom: 20 })
             .shadow({ radius: 4, color: '#10000000', offsetY: 2 })
           }
@@ -233,6 +234,6 @@ export struct ReportContent {
       }
 
     }
-    .width('100%').height('100%').backgroundColor(getTheme().pageBg)
+    .width('100%').height('100%').backgroundColor(getTheme(this.themeMode).pageBg)
   }
 }

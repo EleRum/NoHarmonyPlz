@@ -67,7 +67,7 @@ export struct GpsNetworkDialog {
         Text('服务检查')
           .fontSize(FONT.heading)
           .fontWeight(FontWeight.Bold)
-          .fontColor(getTheme().textPrimary)
+          .fontColor(getTheme(this.themeMode).textPrimary)
       }
       .width('100%')
       .margin({ bottom: SPACE.xl })
@@ -78,31 +78,31 @@ export struct GpsNetworkDialog {
           '📍',
           'GPS 定位',
           this.locationEnabled ? '已开启' : '未开启',
-          this.locationEnabled ? getTheme().success : getTheme().danger
+          this.locationEnabled ? getTheme(this.themeMode).success : getTheme(this.themeMode).danger
         )
 
         Divider()
           .strokeWidth(0.5)
-          .color(getTheme().divider)
+          .color(getTheme(this.themeMode).divider)
           .margin({ top: SPACE.md, bottom: SPACE.md })
 
         this.StatusRow(
           '🌐',
           '网络连接',
           this.networkConnected ? '已连接' : '未连接',
-          this.networkConnected ? getTheme().success : getTheme().danger
+          this.networkConnected ? getTheme(this.themeMode).success : getTheme(this.themeMode).danger
         )
       }
       .width('100%')
       .padding(SPACE.lg)
-      .backgroundColor(getTheme().surfaceSecondary)
+      .backgroundColor(getTheme(this.themeMode).surfaceSecondary)
       .borderRadius(RADIUS.md)
       .margin({ bottom: SPACE.lg })
 
       // ── 提示文字 ──
       Text(this.getSubtitle())
         .fontSize(FONT.caption)
-        .fontColor(getTheme().textSecondary)
+        .fontColor(getTheme(this.themeMode).textSecondary)
         .lineHeight(20)
         .width('100%')
         .margin({ bottom: SPACE.xl })
@@ -111,12 +111,12 @@ export struct GpsNetworkDialog {
       Row() {
         Button('稍后再说')
           .fontSize(FONT.body)
-          .fontColor(getTheme().textSecondary)
+          .fontColor(getTheme(this.themeMode).textSecondary)
           .backgroundColor(Color.Transparent)
           .layoutWeight(1)
           .height(42)
           .borderRadius(RADIUS.pill)
-          .border({ width: 1, color: getTheme().border })
+          .border({ width: 1, color: getTheme(this.themeMode).border })
           .onClick(() => {
             this.controller.close();
           })
@@ -126,7 +126,7 @@ export struct GpsNetworkDialog {
         Button('前往设置')
           .fontSize(FONT.body)
           .fontColor('#FFFFFF')
-          .backgroundColor(getTheme().primary)
+          .backgroundColor(getTheme(this.themeMode).primary)
           .layoutWeight(1)
           .height(42)
           .borderRadius(RADIUS.pill)
@@ -138,7 +138,7 @@ export struct GpsNetworkDialog {
     }
     .padding({ top: SPACE.xxl, left: SPACE.xl, right: SPACE.xl, bottom: SPACE.xl })
     .borderRadius(RADIUS.lg)
-    .backgroundColor(getTheme().surface)
+    .backgroundColor(getTheme(this.themeMode).surface)
     .width('85%')
   }
 
@@ -154,7 +154,7 @@ export struct GpsNetworkDialog {
 
       Text(label)
         .fontSize(FONT.subheading)
-        .fontColor(getTheme().textPrimary)
+        .fontColor(getTheme(this.themeMode).textPrimary)
         .fontWeight(FontWeight.Medium)
         .layoutWeight(1)
 

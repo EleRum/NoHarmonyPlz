@@ -181,7 +181,7 @@ export struct UserProfilePage {
           Text(this.isOnboarding ? '👋 欢迎加入' : '👤 个人资料')
             .fontSize(18)
             .fontWeight(FontWeight.Bold)
-            .fontColor(getTheme().textPrimary)
+            .fontColor(getTheme(this.themeMode).textPrimary)
 
           Blank()
 
@@ -193,11 +193,11 @@ export struct UserProfilePage {
 
         if (this.isOnboarding) {
           Text('只需填写昵称即可开始，其他信息可稍后补充')
-            .fontSize(12).fontColor(getTheme().textSecondary)
+            .fontSize(12).fontColor(getTheme(this.themeMode).textSecondary)
             .width('100%').padding({ left: 20, right: 20, top: 8, bottom: 4 })
         }
 
-        Divider().color(getTheme().border)
+        Divider().color(getTheme(this.themeMode).border)
 
         Scroll() {
           Column() {
@@ -207,7 +207,7 @@ export struct UserProfilePage {
             // 用户名（引导模式下必填）
             Row() {
               Text('用户名')
-                .fontSize(13).fontColor(getTheme().textSecondary)
+                .fontSize(13).fontColor(getTheme(this.themeMode).textSecondary)
               if (this.isOnboarding) {
                 Text(' *')
                   .fontSize(13).fontColor('#EF4444')
@@ -217,7 +217,7 @@ export struct UserProfilePage {
             .width('100%')
             TextInput({ placeholder: '请输入你的昵称', text: this.username })
               .fontSize(14).width('100%').height(44)
-              .backgroundColor(getTheme().surfaceSecondary).borderRadius(8)
+              .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
               .padding({ left: 12, right: 12 })
               .onChange((v: string) => { this.username = v; })
 
@@ -228,7 +228,7 @@ export struct UserProfilePage {
             TextInput({ placeholder: '请输入年龄', text: this.age })
               .type(InputType.Number)
               .fontSize(14).width('100%').height(44)
-              .backgroundColor(getTheme().surfaceSecondary).borderRadius(8)
+              .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
               .padding({ left: 12, right: 12 })
               .onChange((v: string) => { this.age = v; })
 
@@ -239,7 +239,7 @@ export struct UserProfilePage {
             Row() {
               TextInput({ placeholder: '请输入城市名', text: this.city })
                 .fontSize(14).height(44).layoutWeight(1)
-                .backgroundColor(getTheme().surfaceSecondary).borderRadius(8)
+                .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
                 .padding({ left: 12, right: 12 })
                 .onChange((v: string) => { this.city = v; })
               Text(this.isLocating ? '⏳' : '📍')
@@ -264,7 +264,7 @@ export struct UserProfilePage {
             this.SectionSpacer()
             this.SectionTitle('🏷️ 旅行偏好')
             Text('选择你感兴趣的类型（可多选）')
-              .fontSize(12).fontColor(getTheme().textSecondary)
+              .fontSize(12).fontColor(getTheme(this.themeMode).textSecondary)
               .margin({ top: 6, bottom: 12 })
               .width('100%')
 
@@ -301,7 +301,7 @@ export struct UserProfilePage {
         }
         .layoutWeight(1).scrollBar(BarState.Off)
       }
-      .width('100%').height('100%').backgroundColor(getTheme().pageBg)
+      .width('100%').height('100%').backgroundColor(getTheme(this.themeMode).pageBg)
 
       // Toast
       if (this.toastVisible) {
@@ -322,7 +322,7 @@ export struct UserProfilePage {
     Text(title)
       .fontSize(15)
       .fontWeight(FontWeight.Medium)
-      .fontColor(getTheme().textPrimary)
+      .fontColor(getTheme(this.themeMode).textPrimary)
       .width('100%')
       .margin({ top: 16 })
   }
@@ -335,7 +335,7 @@ export struct UserProfilePage {
   @Builder
   FieldLabel(label: string) {
     Text(label)
-      .fontSize(13).fontColor(getTheme().textSecondary)
+      .fontSize(13).fontColor(getTheme(this.themeMode).textSecondary)
       .margin({ top: 12, bottom: 6 })
       .width('100%')
   }

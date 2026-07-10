@@ -1698,7 +1698,7 @@ export struct MapPage {
                 Row() {
                   Text('附近门店').fontSize(16).fontWeight(FontWeight.Bold)
                   Blank()
-                  Text('✕').fontSize(18).fontColor(getTheme().textSecondary)
+                  Text('✕').fontSize(18).fontColor(getTheme(this.themeMode).textSecondary)
                     .onClick(() => { this.showRecPicker = false; })
                 }.width('100%').margin({ bottom: 10 })
                 Scroll() {
@@ -1706,8 +1706,8 @@ export struct MapPage {
                     ForEach(this.pickerGroup, (rec: Recommendation) => {
                       Row() {
                         Text(this.activityEmoji(rec.placeType) + ' ' + rec.placeName)
-                          .fontSize(15).fontColor(getTheme().textPrimary).layoutWeight(1)
-                        Text('›').fontSize(18).fontColor(getTheme().textTertiary)
+                          .fontSize(15).fontColor(getTheme(this.themeMode).textPrimary).layoutWeight(1)
+                        Text('›').fontSize(18).fontColor(getTheme(this.themeMode).textTertiary)
                       }
                       .width('100%').padding({ top: 12, bottom: 12 })
                       .border({ width: { bottom: 0.5 }, color: '#F0F0F0' })
@@ -1716,7 +1716,7 @@ export struct MapPage {
                   }
                 }.height(240)
               }
-              .padding(16).backgroundColor(getTheme().surface)
+              .padding(16).backgroundColor(getTheme(this.themeMode).surface)
               .borderRadius({ topLeft: 16, topRight: 16 })
               .shadow({ radius: 8, color: '#20000000', offsetY: -2 })
             }
@@ -1734,7 +1734,7 @@ export struct MapPage {
                 Row() {
                   Text('🤖 足迹助手').fontSize(16).fontWeight(FontWeight.Bold)
                   Blank()
-                  Text('✕').fontSize(18).fontColor(getTheme().textSecondary)
+                  Text('✕').fontSize(18).fontColor(getTheme(this.themeMode).textSecondary)
                     .onClick(() => { this.showChat = false; })
                 }.width('100%').margin({ bottom: 8 })
 
@@ -1752,7 +1752,7 @@ export struct MapPage {
                             .border({ width: 0.5, color: '#7C3AED' })
                         } else {
                           // AI 消息靠左，灰色气泡
-                          Text(bubble.content).fontSize(13).fontColor(getTheme().textPrimary)
+                          Text(bubble.content).fontSize(13).fontColor(getTheme(this.themeMode).textPrimary)
                             .padding(10).backgroundColor(isDarkTheme() ? '#3A3A3C' : '#F0F2F5').borderRadius(12)
                             .maxLines(10).constraintSize({ maxWidth: '80%' })
                             .textOverflow({ overflow: TextOverflow.Clip })
@@ -1784,7 +1784,7 @@ export struct MapPage {
                 Row() {
                   TextInput({ placeholder: '输入指令...', text: this.chatInput })
                     .fontSize(13).height(36).layoutWeight(1)
-                    .backgroundColor(getTheme().surfaceSecondary).borderRadius(18).padding({ left: 12, right: 12 })
+                    .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(18).padding({ left: 12, right: 12 })
                     .onChange((v: string) => { this.chatInput = v; })
                   Button('发送')
                     .fontSize(12).height(36).padding({ left: 12, right: 12 })
@@ -1792,7 +1792,7 @@ export struct MapPage {
                     .onClick(() => { this.sendChat(); })
                 }.width('100%')
               }
-              .padding(12).backgroundColor(getTheme().surface)
+              .padding(12).backgroundColor(getTheme(this.themeMode).surface)
               .borderRadius({ topLeft: 16, topRight: 16 })
               .shadow({ radius: 8, color: '#20000000', offsetY: -2 })
             }
@@ -1808,7 +1808,7 @@ export struct MapPage {
                 Row() {
                   Text('🧭 导航').fontSize(16).fontWeight(FontWeight.Bold)
                   Blank()
-                  Text('✕').fontSize(18).fontColor(getTheme().textSecondary)
+                  Text('✕').fontSize(18).fontColor(getTheme(this.themeMode).textSecondary)
                     .onClick(() => { this.showNavigation = false; this.clearNavigationRoute(); })
                 }.width('100%').margin({ bottom: 8 })
 
@@ -1818,7 +1818,7 @@ export struct MapPage {
                   Row() {
                     TextInput({ placeholder: '搜索目的地...', text: this.navSearchQuery })
                       .fontSize(13).height(36).layoutWeight(1)
-                      .backgroundColor(getTheme().surfaceSecondary).borderRadius(18).padding({ left: 12, right: 12 })
+                      .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(18).padding({ left: 12, right: 12 })
                       .onChange((v: string) => { this.navSearchQuery = v; })
                     Button('搜索')
                       .fontSize(12).height(36).padding({ left: 10, right: 10 })
@@ -1837,7 +1837,7 @@ export struct MapPage {
                   // 起点信息
                   Row() {
                     Text('📍').fontSize(14)
-                    Text(this.navOriginName).fontSize(12).fontColor(getTheme().textSecondary)
+                    Text(this.navOriginName).fontSize(12).fontColor(getTheme(this.themeMode).textSecondary)
                       .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                     Blank()
                     Text('点击地图选点').fontSize(10).fontColor('#10B981')
@@ -1859,14 +1859,14 @@ export struct MapPage {
                         ForEach(this.navSearchResults, (poi: PoiResult) => {
                           Row() {
                             Column() {
-                              Text(poi.name).fontSize(14).fontColor(getTheme().textPrimary).maxLines(1)
+                              Text(poi.name).fontSize(14).fontColor(getTheme(this.themeMode).textPrimary).maxLines(1)
                                 .textOverflow({ overflow: TextOverflow.Ellipsis })
-                              Text(poi.address || '').fontSize(11).fontColor(getTheme().textSecondary).maxLines(1)
+                              Text(poi.address || '').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).maxLines(1)
                                 .textOverflow({ overflow: TextOverflow.Ellipsis })
                             }.layoutWeight(1).alignItems(HorizontalAlign.Start)
                             Text(poi.distance > 0 ? (poi.distance < 1000 ? Math.floor(poi.distance) + 'm' : (poi.distance / 1000).toFixed(1) + 'km') : '')
-                              .fontSize(11).fontColor(getTheme().textSecondary).margin({ right: 4 })
-                            Text('→').fontSize(18).fontColor(getTheme().textTertiary)
+                              .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ right: 4 })
+                            Text('→').fontSize(18).fontColor(getTheme(this.themeMode).textTertiary)
                           }
                           .width('100%').padding({ top: 10, bottom: 10 })
                           .border({ width: { bottom: 0.5 }, color: '#F0F0F0' })
@@ -1892,27 +1892,27 @@ export struct MapPage {
                     Column() {
                       Text(this.formatNavDistance(this.navRoute.distance))
                         .fontSize(22).fontWeight(FontWeight.Bold).fontColor('#10B981')
-                      Text('距离').fontSize(10).fontColor(getTheme().textSecondary)
+                      Text('距离').fontSize(10).fontColor(getTheme(this.themeMode).textSecondary)
                     }.layoutWeight(1)
                     Column() {
                       Text(this.formatNavDuration(this.navRoute.duration))
                         .fontSize(22).fontWeight(FontWeight.Bold).fontColor('#10B981')
-                      Text('预计时间').fontSize(10).fontColor(getTheme().textSecondary)
+                      Text('预计时间').fontSize(10).fontColor(getTheme(this.themeMode).textSecondary)
                     }.layoutWeight(1)
                     Column() {
                       Text(this.navRoute.steps.length.toString())
                         .fontSize(22).fontWeight(FontWeight.Bold).fontColor('#10B981')
-                      Text('步骤').fontSize(10).fontColor(getTheme().textSecondary)
+                      Text('步骤').fontSize(10).fontColor(getTheme(this.themeMode).textSecondary)
                     }.layoutWeight(1)
                   }.width('100%').padding(10).backgroundColor(isDarkTheme() ? '#1A2E24' : '#F0FDF4').borderRadius(10).margin({ bottom: 6 })
 
                   // 起终点
                   Text('🟢 ' + this.navOriginName + '  →  🔴 ' + (this.navRoute.destination || '目的地'))
-                    .fontSize(11).fontColor(getTheme().textSecondary).width('100%').margin({ bottom: 6 })
+                    .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).width('100%').margin({ bottom: 6 })
                     .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
 
                   // 步骤列表
-                  Text('导航步骤').fontSize(12).fontWeight(FontWeight.Medium).fontColor(getTheme().textPrimary)
+                  Text('导航步骤').fontSize(12).fontWeight(FontWeight.Medium).fontColor(getTheme(this.themeMode).textPrimary)
                     .width('100%').margin({ bottom: 4 })
                   Scroll() {
                     Column() {
@@ -1920,14 +1920,14 @@ export struct MapPage {
                         Row() {
                           Text(this.navStepActionIcon(step.action)).fontSize(16).width(24)
                           Column() {
-                            Text(step.instruction || '继续前行').fontSize(12).fontColor(getTheme().textPrimary)
+                            Text(step.instruction || '继续前行').fontSize(12).fontColor(getTheme(this.themeMode).textPrimary)
                               .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
                             if (step.road && step.road.length > 0) {
-                              Text(step.road).fontSize(10).fontColor(getTheme().textSecondary)
+                              Text(step.road).fontSize(10).fontColor(getTheme(this.themeMode).textSecondary)
                             }
                           }.layoutWeight(1).alignItems(HorizontalAlign.Start)
                           Text(step.distance > 0 ? (step.distance < 1000 ? Math.floor(step.distance) + 'm' : (step.distance / 1000).toFixed(1) + 'km') : '')
-                            .fontSize(10).fontColor(getTheme().textSecondary)
+                            .fontSize(10).fontColor(getTheme(this.themeMode).textSecondary)
                         }
                         .width('100%').padding({ top: 6, bottom: 6 })
                         .border({ width: { bottom: 0.5 }, color: '#F0F0F0' })
@@ -1942,17 +1942,17 @@ export struct MapPage {
                   Row() {
                     Button('清除路线')
                       .fontSize(12).height(34).layoutWeight(1)
-                      .backgroundColor(getTheme().surfaceSecondary).fontColor(getTheme().textSecondary).borderRadius(17)
+                      .backgroundColor(getTheme(this.themeMode).surfaceSecondary).fontColor(getTheme(this.themeMode).textSecondary).borderRadius(17)
                       .onClick(() => { this.clearNavigationRoute(); })
                     Button('换模式')
                       .fontSize(12).height(34).layoutWeight(1)
-                      .backgroundColor(getTheme().surfaceSecondary).fontColor(getTheme().textPrimary).borderRadius(17)
+                      .backgroundColor(getTheme(this.themeMode).surfaceSecondary).fontColor(getTheme(this.themeMode).textPrimary).borderRadius(17)
                       .onClick(() => { this.navRoute = null; })
                       .margin({ left: 6, right: 6 })
                   }.width('100%')
                 }
               }
-              .padding(12).backgroundColor(getTheme().surface)
+              .padding(12).backgroundColor(getTheme(this.themeMode).surface)
               .borderRadius({ topLeft: 16, topRight: 16 })
               .shadow({ radius: 8, color: '#20000000', offsetY: -2 })
             }
@@ -1983,9 +1983,9 @@ export struct MapPage {
         this.BuildTab('👤', '我的', 3)
       }
       .width('100%').height(56)
-      .backgroundColor(getTheme().tabBarBg)
+      .backgroundColor(getTheme(this.themeMode).tabBarBg)
       .borderRadius({ topLeft: RADIUS.xl, topRight: RADIUS.xl })
-      .shadow({ radius: 8, color: getTheme().shadow, offsetY: -2 })
+      .shadow({ radius: 8, color: getTheme(this.themeMode).shadow, offsetY: -2 })
     }
     .width('100%').height('100%')
   }
@@ -2000,11 +2000,11 @@ export struct MapPage {
         }
         .padding({ left: 14, right: 14, top: 6, bottom: 6 })
         .borderRadius(RADIUS.pill)
-        .backgroundColor(getTheme().primary)
+        .backgroundColor(getTheme(this.themeMode).primary)
       } else {
         Column() {
           Text(icon).fontSize(18).opacity(0.5)
-          Text(label).fontSize(FONT.label).fontColor(getTheme().textTertiary)
+          Text(label).fontSize(FONT.label).fontColor(getTheme(this.themeMode).textTertiary)
         }
       }
     }

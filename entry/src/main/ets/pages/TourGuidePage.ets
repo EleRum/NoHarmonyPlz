@@ -504,10 +504,10 @@ export struct TourGuideContent {
         if (!this.isMapReady) {
           Column() {
             LoadingProgress().width(32).height(32).color('#10B981')
-            Text('地图加载中...').fontSize(13).fontColor(getTheme().textSecondary).margin({ top: 8 })
+            Text('地图加载中...').fontSize(13).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 8 })
           }
           .width('100%').height('100%').justifyContent(FlexAlign.Center)
-          .backgroundColor(getTheme().surfaceSecondary)
+          .backgroundColor(getTheme(this.themeMode).surfaceSecondary)
         }
 
         // 日选择器（有计划时显示）
@@ -540,9 +540,9 @@ export struct TourGuideContent {
                 ForEach(this.plan.dailyPlans[this.selectedDayIndex].pois, (poi: import('../model/TourPlan').TourPoiItem, pidx: number) => {
                   Column() {
                     Text(this.poiEmoji(poi.type)).fontSize(20)
-                    Text(poi.name).fontSize(9).fontColor(getTheme().textSecondary).maxLines(1)
+                    Text(poi.name).fontSize(9).fontColor(getTheme(this.themeMode).textSecondary).maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
-                    Text(poi.timeSlot).fontSize(8).fontColor(getTheme().textSecondary)
+                    Text(poi.timeSlot).fontSize(8).fontColor(getTheme(this.themeMode).textSecondary)
                   }
                   .width(72).padding(4).alignItems(HorizontalAlign.Center)
                 }, (poi: import('../model/TourPlan').TourPoiItem, pidx: number): string => `${pidx}_${poi.name}_${poi.timeSlot}`)
@@ -561,20 +561,20 @@ export struct TourGuideContent {
               Text(this.poiDetailName).fontSize(16).fontWeight(FontWeight.Bold)
                 .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
               Button('✕').fontSize(14).width(28).height(28)
-                .backgroundColor('#00000000').fontColor(getTheme().textSecondary)
+                .backgroundColor('#00000000').fontColor(getTheme(this.themeMode).textSecondary)
                 .onClick(() => { this.showPoiDetail = false; })
             }.width('100%')
 
             if (this.poiDetailInfo.length > 0) {
-              Text(this.poiDetailInfo).fontSize(13).fontColor(getTheme().textSecondary).margin({ top: 4 })
+              Text(this.poiDetailInfo).fontSize(13).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 4 })
             }
             if (this.poiDetailAddr.length > 0) {
-              Text('📍 ' + this.poiDetailAddr).fontSize(12).fontColor(getTheme().textSecondary).margin({ top: 2 })
+              Text('📍 ' + this.poiDetailAddr).fontSize(12).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 2 })
                 .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
             }
           }
           .width('86%').padding(12)
-          .backgroundColor(getTheme().surface).borderRadius(14)
+          .backgroundColor(getTheme(this.themeMode).surface).borderRadius(14)
           .shadow({ radius: 8, color: '#20000000', offsetY: 2 })
           .position({ x: '7%', y: '60%' }).zIndex(20)
           .onClick(() => { this.showPoiDetail = false; })
@@ -618,7 +618,7 @@ export struct TourGuideContent {
                     .padding(8).backgroundColor('#10B981').borderRadius(10)
                     .maxLines(20).constraintSize({ maxWidth: '80%' })
                 } else {
-                  Text(bubble.content).fontSize(12).fontColor(getTheme().textPrimary)
+                  Text(bubble.content).fontSize(12).fontColor(getTheme(this.themeMode).textPrimary)
                     .padding(8).backgroundColor(isDarkTheme() ? '#1A2E24' : '#F0FDF4').borderRadius(10)
                     .maxLines(25).constraintSize({ maxWidth: '85%' })
                   Blank()
@@ -647,7 +647,7 @@ export struct TourGuideContent {
         Row() {
           TextInput({ placeholder: '告诉小途你的旅行计划...', text: this.chatInput })
             .fontSize(13).height(34).layoutWeight(1)
-            .backgroundColor(getTheme().surfaceSecondary).borderRadius(17).padding({ left: 12, right: 12 })
+            .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(17).padding({ left: 12, right: 12 })
             .onChange((v: string) => { this.chatInput = v; })
           Button('发送')
             .fontSize(12).height(34).padding({ left: 12, right: 12 })
@@ -656,7 +656,7 @@ export struct TourGuideContent {
         }.width('100%')
       }
       .padding({ left: 10, right: 10, top: 8, bottom: 8 })
-      .backgroundColor(getTheme().surface)
+      .backgroundColor(getTheme(this.themeMode).surface)
       .border({ width: { top: 0.5 }, color: '#E8E8E8' })
     }
     .width('100%').height('100%')

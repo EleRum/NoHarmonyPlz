@@ -80,11 +80,12 @@ export const DarkColors: ThemeColors = makeDarkColors();
 
 const THEME_KEY: string = 'theme_is_dark';
 
-/** 从 AppStorage 读取当前主题，与 @StorageLink 联动实现响应式 */
-export function getTheme(): ThemeColors {
+/** 根据传入的 mode 返回主题色（配合 @StorageLink 实现响应式） */
+export function getTheme(mode?: string): ThemeColors {
+  if (mode) return mode === 'dark' ? DarkColors : LightColors;
   try {
-    const mode: string | undefined = AppStorage.get(THEME_KEY) as string | undefined;
-    return mode === 'dark' ? DarkColors : LightColors;
+    const m: string | undefined = AppStorage.get(THEME_KEY) as string | undefined;
+    return m === 'dark' ? DarkColors : LightColors;
   } catch (e) {
     return LightColors;
   }

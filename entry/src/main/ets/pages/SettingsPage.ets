@@ -221,12 +221,12 @@ export struct SettingsContent {
       Column() {
         Row() {
           Text('⚙️ 设置')
-            .fontSize(20).fontWeight(FontWeight.Bold).fontColor(getTheme().textPrimary)
+            .fontSize(20).fontWeight(FontWeight.Bold).fontColor(getTheme(this.themeMode).textPrimary)
           Blank()
         }
         .width('100%').padding({ left: 20, right: 20, top: 16, bottom: 12 })
 
-        Divider().color(getTheme().border)
+        Divider().color(getTheme(this.themeMode).border)
 
         Scroll() {
           Column() {
@@ -236,7 +236,7 @@ export struct SettingsContent {
 
             if (this.hasKey) {
               Row() {
-                Text('当前服务:').fontSize(14).fontColor(getTheme().textSecondary)
+                Text('当前服务:').fontSize(14).fontColor(getTheme(this.themeMode).textSecondary)
                 Text(this.providerName)
                   .fontSize(14).fontColor('#3B82F6').fontWeight(FontWeight.Medium)
                   .margin({ left: 6 })
@@ -245,7 +245,7 @@ export struct SettingsContent {
             }
 
             // ─── 服务商选择 ───
-            Text('选择服务商').fontSize(13).fontColor(getTheme().textSecondary).margin({ bottom: 8 }).width('100%')
+            Text('选择服务商').fontSize(13).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 8 }).width('100%')
             Row() {
               ForEach(PROVIDER_OPTIONS, (opt: ProviderOption, index: number) => {
                 Column() {
@@ -270,28 +270,28 @@ export struct SettingsContent {
             // ─── 密钥输入 ───
             TextInput({ placeholder: '输入密钥 ' + this.getDefault().prefixHint, text: this.apiKey })
               .type(this.showKey ? InputType.Normal : InputType.Password)
-              .fontSize(14).fontColor(getTheme().textPrimary).width('100%').height(44)
-              .backgroundColor(getTheme().surfaceSecondary).borderRadius(8)
+              .fontSize(14).fontColor(getTheme(this.themeMode).textPrimary).width('100%').height(44)
+              .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
               .padding({ left: 12, right: 36 })
               .onChange((value: string) => { this.apiKey = value; })
 
             // ─── 自定义端点（所有 provider 通用）───
             this.CardSpacer()
             Text('⚡ 自定义端点（可选，留空使用默认）')
-              .fontSize(13).fontColor(getTheme().textSecondary).margin({ bottom: 6 }).width('100%')
+              .fontSize(13).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 6 }).width('100%')
 
             TextInput({ placeholder: this.getDefault().defaultEndpoint, text: this.customEndpoint })
-              .fontSize(13).fontColor(getTheme().textPrimary).width('100%').height(40)
-              .backgroundColor(getTheme().surfaceSecondary).borderRadius(8)
+              .fontSize(13).fontColor(getTheme(this.themeMode).textPrimary).width('100%').height(40)
+              .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
               .padding({ left: 12, right: 12 })
               .onChange((value: string) => { this.customEndpoint = value; })
 
             Text('模型名（可选，留空使用默认）')
-              .fontSize(12).fontColor(getTheme().textSecondary).margin({ top: 6, bottom: 4 }).width('100%')
+              .fontSize(12).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 6, bottom: 4 }).width('100%')
 
             TextInput({ placeholder: this.getDefault().defaultModel, text: this.customModel })
-              .fontSize(13).fontColor(getTheme().textPrimary).width('100%').height(40)
-              .backgroundColor(getTheme().surfaceSecondary).borderRadius(8)
+              .fontSize(13).fontColor(getTheme(this.themeMode).textPrimary).width('100%').height(40)
+              .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
               .padding({ left: 12, right: 12 })
               .onChange((value: string) => { this.customModel = value; })
 
@@ -299,7 +299,7 @@ export struct SettingsContent {
             Row() {
               Row() {
                 Text(this.showKey ? '🙈' : '👁️').fontSize(14)
-                Text(this.showKey ? '隐藏' : '显示').fontSize(12).fontColor(getTheme().textSecondary).margin({ left: 4 })
+                Text(this.showKey ? '隐藏' : '显示').fontSize(12).fontColor(getTheme(this.themeMode).textSecondary).margin({ left: 4 })
               }
               .onClick(() => { this.showKey = !this.showKey; })
               Blank()
@@ -324,11 +324,11 @@ export struct SettingsContent {
             // 说明
             Column() {
               this.InfoRow('🔑', '获取密钥')
-              Text('  Claude: console.anthropic.com → API Keys').fontSize(11).fontColor(getTheme().textSecondary).margin({ left: 24, bottom: 4 })
-              Text('  DeepSeek: platform.deepseek.com → API Keys').fontSize(11).fontColor(getTheme().textSecondary).margin({ left: 24, bottom: 4 })
-              Text('  华为盘古: console.huaweicloud.com/modelarts → 应用接入 → API Key').fontSize(11).fontColor(getTheme().textSecondary).margin({ left: 24, bottom: 10 })
+              Text('  Claude: console.anthropic.com → API Keys').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ left: 24, bottom: 4 })
+              Text('  DeepSeek: platform.deepseek.com → API Keys').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ left: 24, bottom: 4 })
+              Text('  华为盘古: console.huaweicloud.com/modelarts → 应用接入 → API Key').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ left: 24, bottom: 10 })
               this.InfoRow('💡', '密钥仅保存在本地数据库')
-              Text('  不会上传到任何第三方服务器（除对应 AI 服务商外）。').fontSize(11).fontColor(getTheme().textSecondary).margin({ left: 24, bottom: 4 }).maxLines(3)
+              Text('  不会上传到任何第三方服务器（除对应 AI 服务商外）。').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ left: 24, bottom: 4 }).maxLines(3)
             }
             .width('100%').alignItems(HorizontalAlign.Start).margin({ top: 12 })
 
@@ -342,16 +342,16 @@ export struct SettingsContent {
             Row() {
               Column() {
                 Text('后台自动刷新')
-                  .fontSize(14).fontColor(getTheme().textPrimary)
+                  .fontSize(14).fontColor(getTheme(this.themeMode).textPrimary)
                 Text('每5分钟自动更新推荐')
-                  .fontSize(11).fontColor(getTheme().textSecondary).margin({ top: 2 })
+                  .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 2 })
               }
               .alignItems(HorizontalAlign.Start).layoutWeight(1)
               Toggle({ type: ToggleType.Switch, isOn: this.recEnabled })
                 .onChange((isOn: boolean) => { this.saveRecSetting(isOn); })
             }
             .width('100%').padding(16)
-            .backgroundColor(getTheme().surface).borderRadius(10)
+            .backgroundColor(getTheme(this.themeMode).surface).borderRadius(10)
             .border({ width: 0.5, color: '#F0F0F0' })
 
             this.CardSpacer()
@@ -359,9 +359,9 @@ export struct SettingsContent {
             Row() {
               Column() {
                 Text('地图显示推荐标记')
-                  .fontSize(14).fontColor(getTheme().textPrimary)
+                  .fontSize(14).fontColor(getTheme(this.themeMode).textPrimary)
                 Text('在地图上显示推荐地点')
-                  .fontSize(11).fontColor(getTheme().textSecondary).margin({ top: 2 })
+                  .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 2 })
               }
               .alignItems(HorizontalAlign.Start).layoutWeight(1)
               Toggle({ type: ToggleType.Switch, isOn: this.showMapMarkers })
@@ -372,7 +372,7 @@ export struct SettingsContent {
                 })
             }
             .width('100%').padding(16)
-            .backgroundColor(getTheme().surface).borderRadius(10)
+            .backgroundColor(getTheme(this.themeMode).surface).borderRadius(10)
             .border({ width: 0.5, color: '#F0F0F0' })
 
             this.CardSpacer()
@@ -390,7 +390,7 @@ export struct SettingsContent {
         }
         .layoutWeight(1).scrollBar(BarState.Off)
       }
-      .width('100%').height('100%').backgroundColor(getTheme().pageBg)
+      .width('100%').height('100%').backgroundColor(getTheme(this.themeMode).pageBg)
 
       if (this.toastVisible) {
         Text(this.toastMsg)
@@ -406,8 +406,8 @@ export struct SettingsContent {
   @Builder
   CardTitle(title: string, subtitle: string) {
     Column() {
-      Text(title).fontSize(15).fontWeight(FontWeight.Medium).fontColor(getTheme().textPrimary)
-      Text(subtitle).fontSize(11).fontColor(getTheme().textSecondary).margin({ top: 2 })
+      Text(title).fontSize(15).fontWeight(FontWeight.Medium).fontColor(getTheme(this.themeMode).textPrimary)
+      Text(subtitle).fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 2 })
     }
     .alignItems(HorizontalAlign.Start).width('100%')
   }
@@ -421,7 +421,7 @@ export struct SettingsContent {
   InfoRow(icon: string, text: string) {
     Row() {
       Text(icon).fontSize(14)
-      Text(text).fontSize(12).fontColor(getTheme().textSecondary).margin({ left: 6 })
+      Text(text).fontSize(12).fontColor(getTheme(this.themeMode).textSecondary).margin({ left: 6 })
     }
     .margin({ top: 6 })
   }

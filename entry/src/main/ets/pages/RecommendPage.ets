@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 推荐全页 — 独立路由页面
  */
 import { Logger } from '../common/Logger';
@@ -56,32 +56,32 @@ export struct RecommendPage {
       // 标题栏
       Row() {
         Text('← 返回')
-          .fontSize(FONT.body).fontColor(getTheme().primary)
+          .fontSize(FONT.body).fontColor(getTheme(this.themeMode).primary)
           .onClick(() => { router.back(); })
         Blank()
         Text('💡 附近推荐').fontSize(FONT.heading).fontWeight(FontWeight.Bold)
-          .fontColor(getTheme().textPrimary)
+          .fontColor(getTheme(this.themeMode).textPrimary)
         Blank()
         Text(this.isRefreshing ? '⏳' : '🔄')
           .fontSize(18)
           .onClick(() => { this.onRefresh(); })
       }
       .width('100%').padding({ left: SPACE.lg, right: SPACE.lg, top: SPACE.md, bottom: SPACE.md })
-      .backgroundColor(getTheme().surface)
+      .backgroundColor(getTheme(this.themeMode).surface)
 
-      Divider().color(getTheme().divider).height(0.5)
+      Divider().color(getTheme(this.themeMode).divider).height(0.5)
 
       if (this.isLoading) {
         Column() {
           LoadingProgress().width(36).height(36)
-          Text('加载中…').fontSize(FONT.caption).fontColor(getTheme().textSecondary).margin({ top: SPACE.md })
+          Text('加载中…').fontSize(FONT.caption).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: SPACE.md })
         }
         .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
       } else if (this.recommendations.length === 0) {
         Column() {
           Text('🤖').fontSize(48)
-          Text('暂无推荐').fontSize(FONT.subheading).fontColor(getTheme().textSecondary).margin({ top: SPACE.sm })
-          Text('Agent 正在学习您的出行习惯').fontSize(FONT.caption).fontColor(getTheme().textTertiary).margin({ top: SPACE.xs })
+          Text('暂无推荐').fontSize(FONT.subheading).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: SPACE.sm })
+          Text('Agent 正在学习您的出行习惯').fontSize(FONT.caption).fontColor(getTheme(this.themeMode).textTertiary).margin({ top: SPACE.xs })
         }
         .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
       } else {
@@ -102,13 +102,13 @@ export struct RecommendPage {
                       Text(this.emojiForType(rec.placeType)).fontSize(16).margin({ right: 4 })
                       Text(rec.placeName)
                         .fontSize(FONT.subheading).fontWeight(FontWeight.Medium)
-                        .fontColor(getTheme().textPrimary).maxLines(1)
+                        .fontColor(getTheme(this.themeMode).textPrimary).maxLines(1)
                         .textOverflow({ overflow: TextOverflow.Ellipsis })
                         .layoutWeight(1)
                     }
                     .width('100%')
                     Text(rec.reason || '附近热门选择')
-                      .fontSize(FONT.caption).fontColor(getTheme().textSecondary)
+                      .fontSize(FONT.caption).fontColor(getTheme(this.themeMode).textSecondary)
                       .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
                       .margin({ top: 2 })
                     if (this.getRating(rec)) {
@@ -118,12 +118,12 @@ export struct RecommendPage {
                     }
                   }
                   .alignItems(HorizontalAlign.Start).layoutWeight(1)
-                  Text('›').fontSize(18).fontColor(getTheme().textTertiary)
+                  Text('›').fontSize(18).fontColor(getTheme(this.themeMode).textTertiary)
                 }
                 .width('100%')
               }
               .width('100%').padding(SPACE.md)
-              .backgroundColor(getTheme().surface)
+              .backgroundColor(getTheme(this.themeMode).surface)
               .borderRadius(RADIUS.md)
               .margin({ left: SPACE.lg, right: SPACE.lg, top: SPACE.sm, bottom: SPACE.sm })
               .onClick(() => {
@@ -145,7 +145,7 @@ export struct RecommendPage {
       }
     }
     .width('100%').height('100%')
-    .backgroundColor(getTheme().pageBg)
+    .backgroundColor(getTheme(this.themeMode).pageBg)
   }
 
   getPhotoUrl(rec: Recommendation): string {

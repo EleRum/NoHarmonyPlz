@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 首次启动欢迎页
  * 引导用户进入个人资料填写流程
  */
@@ -40,18 +40,18 @@ export struct WelcomePage {
         Text('足迹地图')
           .fontSize(FONT.hero)
           .fontWeight(FontWeight.Bold)
-          .fontColor(getTheme().textPrimary)
+          .fontColor(getTheme(this.themeMode).textPrimary)
           .margin({ top: SPACE.lg })
 
         Text('记录每一天的足迹，发现生活轨迹')
           .fontSize(FONT.subheading)
-          .fontColor(getTheme().textSecondary)
+          .fontColor(getTheme(this.themeMode).textSecondary)
           .margin({ top: SPACE.sm })
 
         Divider()
           .width(40)
           .height(2)
-          .color(getTheme().primary)
+          .color(getTheme(this.themeMode).primary)
           .margin({ top: SPACE.xxl, bottom: SPACE.xxl })
 
         // 功能简介
@@ -73,16 +73,16 @@ export struct WelcomePage {
         Button('开始使用')
           .fontSize(17)
           .fontColor('#FFFFFF')
-          .backgroundColor(getTheme().primary)
+          .backgroundColor(getTheme(this.themeMode).primary)
           .borderRadius(RADIUS.pill)
           .height(50)
           .width('80%')
-          .shadow({ radius: 8, color: getTheme().primary + '40', offsetY: 4 })
+          .shadow({ radius: 8, color: getTheme(this.themeMode).primary + '40', offsetY: 4 })
           .onClick(() => { this.goToProfile(); })
 
         Text('首次使用需填写基本信息')
           .fontSize(FONT.label)
-          .fontColor(getTheme().textTertiary)
+          .fontColor(getTheme(this.themeMode).textTertiary)
           .margin({ top: SPACE.md, bottom: SPACE.xxxl })
       }
       .width('100%')
@@ -90,7 +90,7 @@ export struct WelcomePage {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(getTheme().surface)
+    .backgroundColor(getTheme(this.themeMode).surface)
   }
 
   @Builder
@@ -101,7 +101,7 @@ export struct WelcomePage {
         .width(32)
       Text(text)
         .fontSize(FONT.body)
-        .fontColor(getTheme().textPrimary)
+        .fontColor(getTheme(this.themeMode).textPrimary)
         .margin({ left: SPACE.sm })
     }
     .width('100%')

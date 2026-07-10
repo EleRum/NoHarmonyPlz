@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 我的页 — 个人资料 + 设置 合并
  */
 import { Logger } from '../common/Logger';
@@ -76,7 +76,7 @@ export struct ProfileContent {
               .fontSize(18).fontColor('#FFFFFF')
           }
           .width(40).height(40).borderRadius(20)
-          .backgroundColor(getTheme().primary)
+          .backgroundColor(getTheme(this.themeMode).primary)
           .justifyContent(FlexAlign.Center)
           .margin({ right: SPACE.md })
 
@@ -84,29 +84,29 @@ export struct ProfileContent {
             if (this.profileName) {
               Text(this.profileName)
                 .fontSize(FONT.subheading).fontWeight(FontWeight.Medium)
-                .fontColor(getTheme().textPrimary)
+                .fontColor(getTheme(this.themeMode).textPrimary)
               if (this.profileSummary) {
                 Text(this.profileSummary)
-                  .fontSize(FONT.caption).fontColor(getTheme().textSecondary)
+                  .fontSize(FONT.caption).fontColor(getTheme(this.themeMode).textSecondary)
               }
             } else {
               Text('未设置个人资料')
-                .fontSize(FONT.body).fontColor(getTheme().textSecondary)
+                .fontSize(FONT.body).fontColor(getTheme(this.themeMode).textSecondary)
             }
           }
           .alignItems(HorizontalAlign.Start).layoutWeight(1)
 
           Text('编辑 ›')
-            .fontSize(FONT.caption).fontColor(getTheme().primary)
+            .fontSize(FONT.caption).fontColor(getTheme(this.themeMode).primary)
             .onClick(() => { this.editProfile(); })
         }
         .width('100%').margin({ bottom: SPACE.sm })
 
-        Divider().color(getTheme().divider).height(0.5).margin({ bottom: SPACE.sm })
+        Divider().color(getTheme(this.themeMode).divider).height(0.5).margin({ bottom: SPACE.sm })
 
         Row() {
           Text(isDarkTheme() ? '🌙 深色模式' : '☀️ 浅色模式')
-            .fontSize(FONT.caption).fontColor(getTheme().textSecondary)
+            .fontSize(FONT.caption).fontColor(getTheme(this.themeMode).textSecondary)
           Blank()
           Toggle({ type: ToggleType.Switch, isOn: isDarkTheme() })
             .onChange((isOn: boolean) => { toggleTheme(); }).height(28)
@@ -115,7 +115,7 @@ export struct ProfileContent {
       }
       .width('100%')
       .padding(SPACE.lg)
-      .backgroundColor(getTheme().surface)
+      .backgroundColor(getTheme(this.themeMode).surface)
       .borderRadius(RADIUS.lg)
       .margin({ left: SPACE.lg, right: SPACE.lg, top: SPACE.lg })
 
@@ -126,6 +126,6 @@ export struct ProfileContent {
         .layoutWeight(1)
     }
     .width('100%').height('100%')
-    .backgroundColor(getTheme().pageBg)
+    .backgroundColor(getTheme(this.themeMode).pageBg)
   }
 }
