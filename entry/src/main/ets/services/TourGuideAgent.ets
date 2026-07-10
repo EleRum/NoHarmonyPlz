@@ -40,7 +40,18 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。
 - make_plan 只创建骨架，不自动加景点。完成后先问想看什么吃什么
 - make_plan 填 days 参数反映用户说的天数
 - 主动推进，不等用户催
-- 不搜索时不要加 ---JSON---`;
+- 不搜索时不要加 ---JSON---
+
+## 餐饮安排（一日三餐）
+- 规划每天行程时，必须为每个时间段推荐餐饮：
+  * 早餐（7:00-9:00）：当地特色早餐、早茶、咖啡馆
+  * 午餐（11:30-13:30）：当地美食、特色餐厅、小吃
+  * 晚餐（17:30-20:00）：正餐、火锅、地方菜、夜市
+- 用户说"吃什么""午饭""晚饭""早餐"→ search_and_add 搜对应时段的美食
+- 每完成一个景点添加后，主动问"附近要不要顺便吃点东西？"
+- 每天的午餐和晚餐不应该被遗漏，主动提醒用户安排
+- timeSlot 仅作为初始参考，实际到达时间会根据导航路线时长自动推算
+- 用户说"第X天几点到几点"时可以手动指定时间，否则交给导航计算`;
 
 export interface ToolCall {
   action: string;
@@ -263,11 +274,6 @@ export class TourGuideAgent {
 
   /** 执行工具并返回结果（含地图更新数据 + AI 继续对话） */
   async executeToolAndContinue(action: string, params: Record<string, string>): Promise<AgentResponse> {
-    this.toolCallCount++;
-    if (this.toolCallCount > 30) {
-      return { text: '已进行较多操作，请确认当前的行程计划，或继续告诉我你的需求。' };
-    }
-
     let resultText: string = '';
     let mapCenter: LatLng | undefined = undefined;
     let markers: MapMarker[] | undefined = undefined;
@@ -357,22 +363,29 @@ export class TourGuideAgent {
           // 自动扩容到所需天数
           while (this.plan.dailyPlans.length <= saDayIdx) {
             const nd: number = this.plan.dailyPlans.length;
+            let autoPois: TourPoiItem[] = [];
+            if (this.plan.hotel) {
+              autoPois.push(
+                { name: this.plan.hotel.name, lat: this.plan.hotel.lat, lng: this.plan.hotel.lng, type: '酒店住宿', timeSlot: '出发', duration: '', note: '' },
+                { name: this.plan.hotel.name, lat: this.plan.hotel.lat, lng: this.plan.hotel.lng, type: '酒店住宿', timeSlot: '返回', duration: '', note: '' }
+              );
+            }
             this.plan.dailyPlans.push({
-              dayIndex: nd, label: `第${nd + 1}天`, pois:
-                this.plan.hotel ? [
-                  { name: this.plan.hotel.name, lat: this.plan.hotel.lat, lng: this.plan.hotel.lng, type: '酒店住宿', timeSlot: '出发', duration: '', note: '' },
-                  { name: this.plan.hotel.name, lat: this.plan.hotel.lat, lng: this.plan.hotel.lng, type: '酒店住宿', timeSlot: '返回', duration: '', note: '' }
-                ] : [],
-              route: null
+              dayIndex: nd, label: `第${nd + 1}天`, pois: autoPois, route: null
             });
           }
           this.plan.days = this.plan.dailyPlans.length;
         }
 
-        // 全城文字搜索，覆盖城市各个区域
-        const saPois: PoiResult[] = await AmapSearchService.getInstance().searchPoiByText(saKw, this.plan.city);
+        // 全城文字搜索。失败自动用更宽泛的关键词重试
+        let saPois: PoiResult[] = await AmapSearchService.getInstance().searchPoiByText(saKw, this.plan.city);
+        if (saPois.length === 0 && saKw.length > 2) {
+          // 取前2个字再试一次
+          const shortKw: string = saKw.substring(0, 2);
+          saPois = await AmapSearchService.getInstance().searchPoiByText(shortKw, this.plan.city);
+        }
         if (saPois.length === 0) {
-          resultText = `未找到"${saKw}"。`;
+          resultText = `在${this.plan.city}未找到"${saKw}"，试试换个说法？`;
           break;
         }
 
@@ -394,13 +407,15 @@ export class TourGuideAgent {
           mode: params['mode'] || undefined
         };
 
-        // 插入到"返回"之前（酒店或出发地的返回点）
+        // 有酒店时插在"返回"之前，无酒店时直接追加
         let saInserted: boolean = false;
-        for (let i: number = saDay.pois.length - 1; i >= 0; i--) {
-          if (saDay.pois[i].timeSlot === '返回') {
-            saDay.pois.splice(i, 0, newPoi);
-            saInserted = true;
-            break;
+        if (this.plan.hotel) {
+          for (let i: number = saDay.pois.length - 1; i >= 0; i--) {
+            if (saDay.pois[i].timeSlot === '返回') {
+              saDay.pois.splice(i, 0, newPoi);
+              saInserted = true;
+              break;
+            }
           }
         }
         if (!saInserted) {
@@ -444,32 +459,24 @@ export class TourGuideAgent {
         const userDays: number = parseInt(params['days'] ?? '0');
         this.plan.days = userDays > 0 ? userDays : (this.plan.days > 0 ? this.plan.days : 3);
 
-        // 酒店可选：没选酒店就用城市中心作为起点/终点
-        let baseName: string;
-        let baseLat: number;
-        let baseLng: number;
+        // 酒店可选：没选酒店则不设起终点，行程从第一站开始
         if (hotelName && hotelLat !== 0) {
           this.plan.hotel = { name: hotelName, lat: hotelLat, lng: hotelLng, type: '酒店住宿', timeSlot: '入住', duration: '全程', note: '' };
-          baseName = hotelName;
-          baseLat = hotelLat;
-          baseLng = hotelLng;
-        } else {
-          baseName = this.plan.city + '市中心';
-          baseLat = this.plan.cityLat;
-          baseLng = this.plan.cityLng;
         }
 
-        // 调整天数时保留已有的行程内容
-        const hadContent: boolean = this.plan.dailyPlans.length > 0;
+        // 调整天数时保留已有内容。没酒店时不加起终点
+        let hadContent: boolean = this.plan.dailyPlans.length > 0;
         while (this.plan.dailyPlans.length < this.plan.days) {
           const nd: number = this.plan.dailyPlans.length;
+          let basePois: TourPoiItem[] = [];
+          if (this.plan.hotel) {
+            basePois.push(
+              { name: this.plan.hotel.name, lat: this.plan.hotel.lat, lng: this.plan.hotel.lng, type: '酒店住宿', timeSlot: '出发', duration: '', note: '' },
+              { name: this.plan.hotel.name, lat: this.plan.hotel.lat, lng: this.plan.hotel.lng, type: '酒店住宿', timeSlot: '返回', duration: '', note: '' }
+            );
+          }
           this.plan.dailyPlans.push({
-            dayIndex: nd, label: `第${nd + 1}天`,
-            pois: [
-              { name: baseName, lat: baseLat, lng: baseLng, type: '出发地', timeSlot: '出发', duration: '', note: '' },
-              { name: baseName, lat: baseLat, lng: baseLng, type: '出发地', timeSlot: '返回', duration: '', note: '' }
-            ],
-            route: null
+            dayIndex: nd, label: `第${nd + 1}天`, pois: basePois, route: null
           });
         }
         // 减少天数则截断，保留前 N 天
@@ -604,17 +611,26 @@ export class TourGuideAgent {
         planCtx += `\n  ${d.label}: ` + d.pois.map((p, i) => `[${i}]${p.name}(${p.type},${p.timeSlot})`).join(' → ');
       }
     }
-    const followMsg: string = `工具 ${action} 结果：\n${resultText}\n\n${planCtx}\n\n请基于此继续与用户对话。`;
+    const followMsg: string = `工具 ${action} 结果：\n${resultText}\n\n${planCtx}\n\n请基于此继续与用户对话。如果任务还没完成，继续下一步。如果搜索失败，换个关键词重试。`;
     const reply: ClaudeReply = await this.claude.chatConversation(followMsg, SYSTEM_PROMPT);
     const resultText2: string = reply.text || '收到，请继续。';
-    const nextTool: ToolCall | undefined = this.parseToolCall(resultText2);
+    let nextTool: ToolCall | undefined = this.parseToolCall(resultText2);
+    // 如果没有工具调用且回复很短，重试一次
+    if (!nextTool && resultText2.length < 20) {
+      const retryReply: ClaudeReply = await this.claude.chatConversation(
+        '请继续完成任务，下一步做什么？', SYSTEM_PROMPT);
+      const retryText: string = retryReply.text || '';
+      nextTool = this.parseToolCall(retryText);
+      const resp: AgentResponse = { text: this.stripJson(retryText || resultText2), toolCall: nextTool };
+      return resp;
+    }
     const resp: AgentResponse = { text: this.stripJson(resultText2), toolCall: nextTool };
     return resp;
   }
 
   /** 自动分配下一个可用时间段 */
   private nextTimeSlot(day: TourDay): string {
-    const defaultSlots: string[] = ['上午9:00', '上午11:00', '中午12:00', '下午14:00', '下午16:00', '晚上18:00'];
+    const defaultSlots: string[] = ['早餐7:30', '上午9:00', '午餐12:00', '下午14:00', '晚餐18:00', '晚上20:00'];
     const usedSlots: Set<string> = new Set(day.pois.map((p) => p.timeSlot));
     for (const s of defaultSlots) {
       if (!usedSlots.has(s)) return s;
@@ -694,6 +710,84 @@ export class TourGuideAgent {
       }
     }
     day.route.path = allPts;
+    try { this.recalcDayTimeline(day); } catch (e) { /* 时间推算失败不影响路线绘制 */ }
+  }
+
+  /** 根据导航路线时长计算每天各 POI 的实际时间槽 */
+  private recalcDayTimeline(day: TourDay): void {
+    if (day.pois.length < 2) return;
+    const staticSlots: string[] = ['出发', '返回', '入住'];
+    // 找第一个非标记 POI 作为时间基准
+    let baseMin: number = 9 * 60;
+    let firstIdx: number = -1;
+    for (let i: number = 0; i < day.pois.length; i++) {
+      if (staticSlots.indexOf(day.pois[i].timeSlot) < 0) {
+        baseMin = this.parseTimeSlotMinutes(day.pois[i].timeSlot);
+        firstIdx = i;
+        break;
+      }
+    }
+    if (firstIdx < 0) return;
+    for (let pi: number = firstIdx; pi < day.pois.length; pi++) {
+      if (staticSlots.indexOf(day.pois[pi].timeSlot) >= 0) continue;
+      if (pi === firstIdx) {
+        day.pois[pi].timeSlot = this.minutesToTimeSlot(baseMin);
+        continue;
+      }
+      const prevStay: number = this.parseDurationMinutes(day.pois[pi - 1].duration);
+      const realCount: number = day.pois.filter(p => staticSlots.indexOf(p.timeSlot) < 0).length;
+      let segDur: number = 0;
+      if (day.route && day.route.duration > 0 && realCount > 1) {
+        segDur = day.route.duration / (realCount - 1);
+      }
+      baseMin += prevStay + Math.ceil(segDur / 60);
+      day.pois[pi].timeSlot = this.minutesToTimeSlot(baseMin);
+    }
+  }
+
+  /** 解析时间槽字符串为分钟数（从0点开始） */
+  private parseTimeSlotMinutes(ts: string): number {
+    if (!ts || ts.length === 0) return 9 * 60;
+    const match: RegExpMatchArray | null = ts.match(/(\d{1,2}):(\d{2})/);
+    if (match) {
+      const h: number = parseInt(match[1]) || 9;
+      const m: number = parseInt(match[2]) || 0;
+      return Math.max(0, Math.min(23 * 60 + 59, h * 60 + m));
+    }
+    if (ts.includes('早餐')) return 7 * 60 + 30;
+    if (ts.includes('上午')) return 9 * 60;
+    if (ts.includes('午餐') || ts.includes('中午')) return 12 * 60;
+    if (ts.includes('下午')) return 14 * 60;
+    if (ts.includes('晚餐')) return 18 * 60;
+    if (ts.includes('晚上')) return 19 * 60;
+    return 9 * 60;
+  }
+
+  /** 解析停留时间字符串为分钟数 */
+  private parseDurationMinutes(dur: string): number {
+    if (!dur || dur.length === 0) return 90; // 默认1.5小时
+    const hMatch: RegExpMatchArray | null = dur.match(/(\d+)\s*h/);
+    const mMatch: RegExpMatchArray | null = dur.match(/(\d+)\s*min/);
+    let mins: number = 0;
+    if (hMatch) mins += parseInt(hMatch[1]) * 60;
+    if (mMatch) mins += parseInt(mMatch[1]);
+    if (mins === 0) mins = 90; // 默认
+    return mins;
+  }
+
+  /** 将分钟数转为中文时间槽字符串 */
+  private minutesToTimeSlot(mins: number): string {
+    const total: number = mins % (24 * 60);
+    const h: number = Math.floor(total / 60);
+    const m: number = total % 60;
+    const timeStr: string = `${h}:${String(m).padStart(2, '0')}`;
+    if (h < 6) return '凌晨' + timeStr;
+    if (h < 9) return '早餐' + timeStr;
+    if (h < 11) return '上午' + timeStr;
+    if (h < 13) return '午餐' + timeStr;
+    if (h < 17) return '下午' + timeStr;
+    if (h < 20) return '晚餐' + timeStr;
+    return '晚上' + timeStr;
   }
 
   private parseToolCall(text: string): ToolCall | undefined {

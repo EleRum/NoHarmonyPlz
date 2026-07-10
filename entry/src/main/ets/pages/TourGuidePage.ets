@@ -174,6 +174,7 @@ export struct TourGuideContent {
     } catch (_e) {
       this.chatMessages.push({ role: 'ai', content: '抱歉，出错了。请再试一次。' });
     }
+    this.saveState();
     this.isAiThinking = false;
   }
 
@@ -232,6 +233,7 @@ export struct TourGuideContent {
         }
       }
       this.chatMessages.push({ role: 'ai', content: aiResp.text });
+      this.saveState();
 
       // 继续下一工具
       if (nextTool) {

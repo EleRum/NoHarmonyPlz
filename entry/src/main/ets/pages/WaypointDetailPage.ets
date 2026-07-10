@@ -101,6 +101,9 @@ struct WaypointDetailPage {
   @State showEditSheet: boolean = false;
   @State showDeleteConfirm: boolean = false;
   @State showRenameInput: boolean = false;
+  @State showTypeConfirm: boolean = false;
+  @State pendingType: string = '';
+  @State pendingTypeLabel: string = '';
   @State calService: CalibrationService = CalibrationService.getInstance();
   @State displayActivityTag: string = this.data.activityTag;
   @State displayPoiName: string = this.data.poiName;
@@ -424,7 +427,11 @@ struct WaypointDetailPage {
                 .backgroundColor(opt.type === this.displayActivityTag ? getTheme(this.themeMode).primaryLight : getTheme(this.themeMode).surfaceSecondary)
                 .border({ width: 1, color: opt.type === this.displayActivityTag ? getTheme(this.themeMode).primary : getTheme(this.themeMode).border })
                 .borderRadius(10).margin({ left: 2, right: 2 })
-                .onClick(() => { this.doCalibrateType(opt.type); })
+                .onClick(() => {
+                  this.pendingType = opt.type;
+                  this.pendingTypeLabel = opt.label;
+                  this.showTypeConfirm = true;
+                })
               })
             }.width('100%').margin({ bottom: 6 })
 
@@ -438,7 +445,11 @@ struct WaypointDetailPage {
                 .backgroundColor(opt.type === this.displayActivityTag ? getTheme(this.themeMode).primaryLight : getTheme(this.themeMode).surfaceSecondary)
                 .border({ width: 1, color: opt.type === this.displayActivityTag ? getTheme(this.themeMode).primary : getTheme(this.themeMode).border })
                 .borderRadius(10).margin({ left: 2, right: 2 })
-                .onClick(() => { this.doCalibrateType(opt.type); })
+                .onClick(() => {
+                  this.pendingType = opt.type;
+                  this.pendingTypeLabel = opt.label;
+                  this.showTypeConfirm = true;
+                })
               })
             }.width('100%')
 
@@ -473,6 +484,43 @@ struct WaypointDetailPage {
         .width('100%').height('100%')
         .position({ x: 0, y: 0 })
         .backgroundColor('#80000000')
+      }
+
+      // ── 活动类型修改确认 ──
+      if (this.showTypeConfirm) {
+        Column() {
+          Column().width('100%').layoutWeight(1)
+            .onClick(() => { this.showTypeConfirm = false; })
+          Column() {
+            Text('确认修改活动类型？').fontSize(16).fontWeight(FontWeight.Medium)
+              .fontColor(getTheme(this.themeMode).textPrimary).margin({ bottom: 16 })
+            Row() {
+              Text('从').fontSize(13).fontColor(getTheme(this.themeMode).textSecondary)
+              Text(ACTIVITY_LABELS[this.displayActivityTag] || this.displayActivityTag).fontSize(15).fontWeight(FontWeight.Medium)
+                .fontColor(getTheme(this.themeMode).textPrimary).margin({ left: 6, right: 6 })
+              Text('→').fontSize(13).fontColor(getTheme(this.themeMode).textSecondary).margin({ right: 6 })
+              Text(this.pendingTypeLabel).fontSize(15).fontWeight(FontWeight.Bold)
+                .fontColor(getTheme(this.themeMode).primary)
+            }.margin({ bottom: 20 })
+            Row() {
+              Button('返回重选').fontSize(14).fontColor(getTheme(this.themeMode).textSecondary)
+                .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8).height(40).layoutWeight(1)
+                .onClick(() => { this.showTypeConfirm = false; })
+              Blank().width(12)
+              Button('确认修改').fontSize(14).fontColor('#FFFFFF')
+                .backgroundColor(getTheme(this.themeMode).primary).borderRadius(8).height(40).layoutWeight(1)
+                .onClick(() => {
+                  this.showTypeConfirm = false;
+                  this.doCalibrateType(this.pendingType);
+                })
+            }.width('100%')
+          }
+          .width('100%').backgroundColor(getTheme(this.themeMode).surface)
+          .borderRadius({ topLeft: 16, topRight: 16 })
+          .padding(20).shadow({ radius: 12, color: '#30000000', offsetY: -4 })
+        }
+        .width('100%').height('100%')
+        .position({ x: 0, y: 0 }).backgroundColor('#80000000')
       }
 
       // ── 地点名称修改弹窗 ──
