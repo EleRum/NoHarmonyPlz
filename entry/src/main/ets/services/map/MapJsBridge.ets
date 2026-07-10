@@ -248,9 +248,11 @@ export class MapJsBridge implements IMapService {
   }
 
   setMapStyle(style: string): void {
-    this.execJs(
-      'if(typeof AMap!==\'undefined\'&&AMap.Map){var m=document.querySelector(\'#container\')._amap;if(m)m.setMapStyle(\'' + style + '\')}'
-    );
+    this.execJs('FootMapBridge.setMapStyle(\'' + style + '\')');
+  }
+
+  setDarkMode(enable: boolean): void {
+    this.execJs('FootMapBridge.setDarkMode(' + (enable ? 'true' : 'false') + ')');
   }
 
   // ─── POI 搜索 ───

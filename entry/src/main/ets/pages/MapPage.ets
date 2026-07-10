@@ -333,6 +333,7 @@ export struct MapPage {
         this.lastThemeDark = darkNow;
         try {
           this.mapService.setMapStyle(darkNow ? 'amap://styles/dark' : 'amap://styles/light');
+          this.mapService.setDarkMode(darkNow);
           Logger.info(TAG, 'Map style switched to %{public}s', darkNow ? 'dark' : 'light');
         } catch (e) {}
       }
@@ -508,6 +509,13 @@ export struct MapPage {
       onMapReady: (_err: Error | null): void => {
         this.isMapReady = true;
         Logger.info(TAG, 'Map ready (JSAPI)');
+        // 地图就绪后应用深色模式
+        if (isDarkTheme() && this.mapService) {
+          setTimeout(() => {
+            this.mapService!.setMapStyle('amap://styles/dark');
+            this.mapService!.setDarkMode(true);
+          }, 1000);
+        }
         this.setupGpsTracking();
         this.moveCamera();
         if (this.dayRoutes.length > 0) {
@@ -544,6 +552,12 @@ export struct MapPage {
       if (!this.isMapReady) {
         this.isMapReady = true;
         Logger.info(TAG, 'Map ready via fallback');
+        if (isDarkTheme() && this.mapService) {
+          setTimeout(() => {
+            this.mapService!.setMapStyle('amap://styles/dark');
+            this.mapService!.setDarkMode(true);
+          }, 1000);
+        }
         this.setupGpsTracking();
         this.moveCamera();
         if (this.dayRoutes.length > 0) {

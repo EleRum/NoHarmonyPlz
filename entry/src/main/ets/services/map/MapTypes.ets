@@ -115,6 +115,7 @@ export interface MapInitConfig {
   lat: number;
   zoom: number;
   apiKey: string;
+  mapStyle?: string;
 }
 
 /** 相机位置快照 */

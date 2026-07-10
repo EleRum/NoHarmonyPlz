@@ -4,6 +4,7 @@
  */
 import { webview } from '@kit.ArkWeb';
 import { getTheme, isDarkTheme } from '../common/Theme';
+
 import { MapWebView } from '../services/map/MapWebView';
 import { Logger } from '../common/Logger';
 import { TourGuideAgent, AgentResponse, ToolCall } from '../services/TourGuideAgent';
@@ -127,7 +128,9 @@ export struct TourGuideContent {
       onMapReady: (_err: Error | null): void => {
         this.isMapReady = true;
         Logger.info(TAG, 'Tour map ready');
-        // 从持久状态恢复计划时，重新绘制地图
+        if (isDarkTheme() && this.mapService) {
+          this.mapService.setMapStyle('amap://styles/dark');
+        }
         if (this.plan && this.plan.dailyPlans.length > 0) {
           this.drawPlanOnMap(this.plan);
         }

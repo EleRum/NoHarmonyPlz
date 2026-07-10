@@ -59,7 +59,7 @@
       map = new AMap.Map('container', {
         zoom: config.zoom || 15,
         center: [config.lng || 116.3974, config.lat || 39.9042],
-        mapStyle: 'amap://styles/light',
+        mapStyle: config.mapStyle || 'amap://styles/light',
         viewMode: '2D',
         resizeEnable: true,
         touchZoom: true,
@@ -370,6 +370,33 @@
     });
   }
 
+  function mapSetStyle(styleUrl) {
+    if (!map) { console.log('[FootMap] setMapStyle: map is null'); return; }
+    try {
+      map.setMapStyle(styleUrl);
+      console.log('[FootMap] setMapStyle applied: ' + styleUrl);
+    } catch(e) {
+      console.error('[FootMap] setMapStyle failed: ' + e.message);
+    }
+  }
+
+  // 深色模式 CSS 回退（当 setMapStyle 不可用时）
+  function mapSetDarkMode(enable) {
+    var c = document.getElementById('container');
+    if (!c) return;
+    if (enable) {
+      c.style.filter = 'invert(0.9) hue-rotate(180deg)';
+      // 反色后再反转图片颜色，使标记/图标保持正常
+      var imgs = document.querySelectorAll('.amap-marker img, .amap-icon img');
+      for (var i = 0; i < imgs.length; i++) {
+        imgs[i].style.filter = 'invert(1) hue-rotate(180deg)';
+      }
+    } else {
+      c.style.filter = '';
+    }
+    console.log('[FootMap] darkMode CSS filter: ' + enable);
+  }
+
   function mapDestroy() {
     mapClearMarkers(); mapClearPolylines();
     if (map) { map.destroy(); map = null; }
@@ -387,7 +414,7 @@
     setPolylineVisible: mapSetPolylineVisible, removePolyline: removePolyline,
     clearPolylines: mapClearPolylines,
     searchNearby: mapSearchNearby, lookupNearestPlace: mapLookupNearestPlace,
-    setMyLocation: mapSetMyLocation, destroy: mapDestroy,
+    setMyLocation: mapSetMyLocation, setMapStyle: mapSetStyle, setDarkMode: mapSetDarkMode, destroy: mapDestroy,
     getDirectionRoute: mapGetDirectionRoute,
     isReady: function () { return mapReady; },
     _resendReady: resendReady
