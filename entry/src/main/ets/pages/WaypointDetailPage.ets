@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 路径点详情页
  * 从地图 marker 点击进入，展示位置、活动、照片等完整信息
  * 照片支持：真实相册照片（URI）或 Mock 文字描述
@@ -13,6 +13,7 @@ import { ActivitySegment } from '../model/ActivitySegment';
 import { Dao } from '../database/Dao';
 import { CalibrationSignal } from '../common/CalibrationSignal';
 import { Logger } from '../common/Logger';
+import { getTheme } from '../common/Theme';
 
 const TAG = 'WaypointDetail';
 
@@ -260,7 +261,7 @@ struct WaypointDetailPage {
           })
       }
       .width('100%').height(48).padding({ left: 12, right: 12 })
-      .backgroundColor('#FFFFFF')
+      .backgroundColor(getTheme().surface)
 
       Scroll() {
         Column() {
@@ -279,7 +280,7 @@ struct WaypointDetailPage {
                     // Mock 文字描述 → 占位卡片
                     Column() {
                       Text('📷').fontSize(48)
-                      Text(item.uri).fontSize(14).fontColor('#555').margin({ top: 8 })
+                      Text(item.uri).fontSize(14).fontColor(getTheme().textSecondary).margin({ top: 8 })
                     }
                     .width('100%').height(200)
                     .justifyContent(FlexAlign.Center)
@@ -294,10 +295,10 @@ struct WaypointDetailPage {
           } else {
             Column() {
               Text('📭').fontSize(40)
-              Text('此处没有拍照').fontSize(13).fontColor('#BBB').margin({ top: 6 })
+              Text('此处没有拍照').fontSize(13).fontColor(getTheme().textTertiary).margin({ top: 6 })
             }
             .width('100%').height(140).justifyContent(FlexAlign.Center)
-            .backgroundColor('#F8F9FA').borderRadius(12)
+            .backgroundColor(getTheme().surfaceSecondary).borderRadius(12)
           }
 
           // ── 地点信息 ──
@@ -305,7 +306,7 @@ struct WaypointDetailPage {
             Row() {
               Text(activityIcon(this.displayActivityTag)).fontSize(28).margin({ right: 12 })
               Column() {
-                Text(this.displayPoiName).fontSize(20).fontWeight(FontWeight.Bold).fontColor('#222')
+                Text(this.displayPoiName).fontSize(20).fontWeight(FontWeight.Bold).fontColor(getTheme().textPrimary)
                 Row() {
                 if (this.displayActivityTag) {
                   Text(ACTIVITY_LABELS[this.displayActivityTag] || this.displayActivityTag)
@@ -330,9 +331,9 @@ struct WaypointDetailPage {
               // 推荐门店：显示推荐理由，不显示活动指标
               Column() {
                 Text('💡 推荐理由')
-                  .fontSize(11).fontColor('#999')
+                  .fontSize(11).fontColor(getTheme().textSecondary)
                 Text(this.data.recReason || '附近热门选择')
-                  .fontSize(14).fontColor('#333').fontWeight(FontWeight.Medium)
+                  .fontSize(14).fontColor(getTheme().textPrimary).fontWeight(FontWeight.Medium)
                   .margin({ top: 4 }).maxLines(10)
               }.width('100%').alignItems(HorizontalAlign.Start).margin({ bottom: 10 })
               Row() {
@@ -354,7 +355,7 @@ struct WaypointDetailPage {
               }.width('100%').margin({ top: 10 })
             }
           }
-          .padding(20).backgroundColor('#FFFFFF')
+          .padding(20).backgroundColor(getTheme().surface)
           .borderRadius(12).width('100%')
           .shadow({ radius: 4, color: '#10000000', offsetY: 2 })
           .margin({ top: 12 })
@@ -377,12 +378,12 @@ struct WaypointDetailPage {
                     } else {
                       Column() {
                         Text('📷').fontSize(28)
-                        Text(item.uri).fontSize(10).fontColor('#666')
+                        Text(item.uri).fontSize(10).fontColor(getTheme().textSecondary)
                           .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
                           .margin({ top: 4 }).textAlign(TextAlign.Center)
                       }
                       .width('100%').padding(8)
-                      .backgroundColor('#F5F6F8').borderRadius(10)
+                      .backgroundColor(getTheme().pageBg).borderRadius(10)
                       .alignItems(HorizontalAlign.Center)
                     }
                   }
@@ -397,7 +398,7 @@ struct WaypointDetailPage {
         }
         .width('100%').padding(16)
       }
-      .width('100%').layoutWeight(1).backgroundColor('#F5F6F8')
+      .width('100%').layoutWeight(1).backgroundColor(getTheme().pageBg)
 
       // ── 校准编辑面板 ──
       if (this.showEditSheet) {
@@ -416,7 +417,7 @@ struct WaypointDetailPage {
               ForEach(this.getTypeOptions().slice(0, 4), (opt: TypeOption) => {
                 Column() {
                   Text(opt.icon).fontSize(22)
-                  Text(opt.label).fontSize(10).fontColor('#666').margin({ top: 2 })
+                  Text(opt.label).fontSize(10).fontColor(getTheme().textSecondary).margin({ top: 2 })
                 }
                 .layoutWeight(1).padding({ top: 10, bottom: 10 })
                 .backgroundColor(opt.type === this.displayActivityTag ? '#EBF3FF' : '#F5F6F8')
@@ -429,7 +430,7 @@ struct WaypointDetailPage {
               ForEach(this.getTypeOptions().slice(4, 8), (opt: TypeOption) => {
                 Column() {
                   Text(opt.icon).fontSize(22)
-                  Text(opt.label).fontSize(10).fontColor('#666').margin({ top: 2 })
+                  Text(opt.label).fontSize(10).fontColor(getTheme().textSecondary).margin({ top: 2 })
                 }
                 .layoutWeight(1).padding({ top: 10, bottom: 10 })
                 .backgroundColor(opt.type === this.displayActivityTag ? '#EBF3FF' : '#F5F6F8')
@@ -461,7 +462,7 @@ struct WaypointDetailPage {
               this.showEditSheet = false;
             })
           }
-          .width('100%').backgroundColor('#FFFFFF')
+          .width('100%').backgroundColor(getTheme().surface)
           .borderRadius({ topLeft: 16, topRight: 16 })
           .padding({ left: 20, right: 20, bottom: 32 })
           .shadow({ radius: 12, color: '#30000000', offsetY: -4 })
@@ -481,10 +482,10 @@ struct WaypointDetailPage {
               .width('100%').textAlign(TextAlign.Center).padding({ top: 16, bottom: 12 })
             TextInput({ placeholder: '输入新名称', text: this.editPoiName })
               .fontSize(14).height(44).width('100%')
-              .backgroundColor('#F5F6F8').borderRadius(8)
+              .backgroundColor(getTheme().pageBg).borderRadius(8)
               .onChange((value: string) => { this.editPoiName = value; })
             Row() {
-              Button('取消').fontSize(14).fontColor('#666')
+              Button('取消').fontSize(14).fontColor(getTheme().textSecondary)
                 .backgroundColor('#F0F0F0').borderRadius(8).height(40).layoutWeight(1)
                 .margin({ right: 8 })
                 .onClick(() => { this.showRenameInput = false; })
@@ -498,7 +499,7 @@ struct WaypointDetailPage {
             }
             .width('100%').margin({ top: 12 })
           }
-          .width('100%').backgroundColor('#FFFFFF')
+          .width('100%').backgroundColor(getTheme().surface)
           .borderRadius({ topLeft: 16, topRight: 16 })
           .padding({ left: 24, right: 24, bottom: 32 })
           .shadow({ radius: 12, color: '#30000000', offsetY: -4 })
@@ -517,10 +518,10 @@ struct WaypointDetailPage {
             Text('⚠️ 确认删除').fontSize(16).fontWeight(FontWeight.Medium)
               .width('100%').textAlign(TextAlign.Center).padding({ top: 20, bottom: 8 })
             Text('删除后该活动段将从时间线和地图中移除。\nAI 重新分类时也不会再出现。')
-              .fontSize(13).fontColor('#666').textAlign(TextAlign.Center)
+              .fontSize(13).fontColor(getTheme().textSecondary).textAlign(TextAlign.Center)
               .padding({ left: 16, right: 16 }).margin({ bottom: 12 })
             Row() {
-              Button('取消').fontSize(14).fontColor('#666')
+              Button('取消').fontSize(14).fontColor(getTheme().textSecondary)
                 .backgroundColor('#F0F0F0').borderRadius(8).height(40).layoutWeight(1)
                 .margin({ right: 8 })
                 .onClick(() => { this.showDeleteConfirm = false; })
@@ -534,7 +535,7 @@ struct WaypointDetailPage {
             }
             .width('100%')
           }
-          .width('100%').backgroundColor('#FFFFFF')
+          .width('100%').backgroundColor(getTheme().surface)
           .borderRadius({ topLeft: 16, topRight: 16 })
           .padding({ left: 24, right: 24, bottom: 32 })
           .shadow({ radius: 12, color: '#30000000', offsetY: -4 })
@@ -572,8 +573,8 @@ struct WaypointDetailPage {
   @Builder
   InfoItem(label: string, value: string) {
     Column() {
-      Text(label).fontSize(11).fontColor('#999')
-      Text(value).fontSize(14).fontColor('#333').fontWeight(FontWeight.Medium).margin({ top: 2 })
+      Text(label).fontSize(11).fontColor(getTheme().textSecondary)
+      Text(value).fontSize(14).fontColor(getTheme().textPrimary).fontWeight(FontWeight.Medium).margin({ top: 2 })
     }.layoutWeight(1).alignItems(HorizontalAlign.Start)
   }
 }

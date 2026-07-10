@@ -247,6 +247,12 @@ export class MapJsBridge implements IMapService {
     );
   }
 
+  setMapStyle(style: string): void {
+    this.execJs(
+      'if(typeof AMap!==\'undefined\'&&AMap.Map){var m=document.querySelector(\'#container\')._amap;if(m)m.setMapStyle(\'' + style + '\')}'
+    );
+  }
+
   // ─── POI 搜索 ───
 
   searchNearby(keywords: string, center: LatLng, radius: number): void {

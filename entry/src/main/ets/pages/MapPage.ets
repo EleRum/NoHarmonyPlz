@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Footprint Map Page
  * Data-first: show footprints on open, switch when map ready
  * Uses IMapService/MapJsBridge for cross-platform map operations
@@ -141,6 +141,7 @@ export struct MapPage {
   private lastKnownProfileRefreshCounter: number = 0;
   private lastKnownRecRefreshCounter: number = 0;
   private lastKnownMapMarkerCounter: number = 0;
+  private lastThemeDark: boolean = false;
   private navRoutePolylineId: string = '';
   private navStartMarkerId: string = '';
   private navEndMarkerId: string = '';
@@ -325,6 +326,15 @@ export struct MapPage {
       if (MapMarkerSignal.counter !== this.lastKnownMapMarkerCounter) {
         this.lastKnownMapMarkerCounter = MapMarkerSignal.counter;
         this.applyMapMarkerSetting();
+      }
+      // 检测深色模式变化 → 切换高德地图样式
+      const darkNow: boolean = isDarkTheme();
+      if (darkNow !== this.lastThemeDark && this.mapService) {
+        this.lastThemeDark = darkNow;
+        try {
+          this.mapService.setMapStyle(darkNow ? 'amap://styles/dark' : 'amap://styles/light');
+          Logger.info(TAG, 'Map style switched to %{public}s', darkNow ? 'dark' : 'light');
+        } catch (e) {}
       }
     }, 2000);
   }
@@ -1577,26 +1587,26 @@ export struct MapPage {
               if (this.dayRoutes.length > 0) {
                 Row() {
                   Column() {
-                    Text(this.routeDistStr()).fontSize(28).fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
+                    Text(this.routeDistStr()).fontSize(28).fontWeight(FontWeight.Bold).fontColor(isDarkTheme() ? '#E5E5E7' : '#FFFFFF')
                     Text(this.routeDistUnit()).fontSize(11).fontColor('#FFFFFF99')
                   }.layoutWeight(1)
                   Column() {
-                    Text(this.routeMinsStr()).fontSize(28).fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
+                    Text(this.routeMinsStr()).fontSize(28).fontWeight(FontWeight.Bold).fontColor(isDarkTheme() ? '#E5E5E7' : '#FFFFFF')
                     Text('min').fontSize(11).fontColor('#FFFFFF99')
                   }.layoutWeight(1)
                   Column() {
-                    Text(this.routePaceStr()).fontSize(28).fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
+                    Text(this.routePaceStr()).fontSize(28).fontWeight(FontWeight.Bold).fontColor(isDarkTheme() ? '#E5E5E7' : '#FFFFFF')
                     Text('pace /km').fontSize(11).fontColor('#FFFFFF99')
                   }.layoutWeight(1)
                   Column() {
-                    Text(this.routePointsStr()).fontSize(28).fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
+                    Text(this.routePointsStr()).fontSize(28).fontWeight(FontWeight.Bold).fontColor(isDarkTheme() ? '#E5E5E7' : '#FFFFFF')
                     Text('pts').fontSize(11).fontColor('#FFFFFF99')
                   }.layoutWeight(1)
                 }.width('100%').padding({ top: 8, bottom: 8 })
               }
             }
             .padding(12)
-            .backgroundColor('#99000000')
+            .backgroundColor(isDarkTheme() ? '#CC1A1A1C' : '#99000000')
             .borderRadius({ topLeft: 0, topRight: 0, bottomLeft: 16, bottomRight: 16 })
             .width('100%')
 
@@ -1604,17 +1614,17 @@ export struct MapPage {
               Text(this.footprintCount > 0
                 ? `P ${this.footprintCount} footprints loaded, map initializing...`
                 : 'No footprint data')
-                .fontSize(13).fontColor('#FFFFFF').padding(8)
+                .fontSize(13).fontColor(isDarkTheme() ? '#E5E5E7' : '#FFFFFF').padding(8)
                 .backgroundColor('#CC3B82F6').borderRadius(8).margin({ top: 8 })
             } else {
               Row() {
                 Row() {}.width(8).height(8).borderRadius(4)
                   .backgroundColor('#50C878').margin({ right: 6 })
                 Text(`GPS 录制中 · ${this.footprintCount} 个足迹点`)
-                  .fontSize(12).fontColor('#FFFFFF')
+                  .fontSize(12).fontColor(isDarkTheme() ? '#E5E5E7' : '#FFFFFF')
               }
               .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-              .backgroundColor('#CC333333').borderRadius(14).margin({ top: 8 })
+              .backgroundColor(isDarkTheme() ? '#CC555555' : '#CC333333').borderRadius(14).margin({ top: 8 })
             }
           }
           .width('100%')
@@ -1624,7 +1634,7 @@ export struct MapPage {
             Blank()
             Column() {
               Text('💡').fontSize(20)
-              Text('推荐').fontSize(9).fontColor('#FFFFFF').margin({ top: 1 })
+              Text('推荐').fontSize(9).fontColor(isDarkTheme() ? '#E5E5E7' : '#FFFFFF').margin({ top: 1 })
             }
             .width(48).height(48).borderRadius(24)
             .backgroundColor('#CC3B82F6').justifyContent(FlexAlign.Center)
@@ -1640,7 +1650,7 @@ export struct MapPage {
             Blank()
             Column() {
               Text('💬').fontSize(20)
-              Text('AI').fontSize(9).fontColor('#FFFFFF').margin({ top: 1 })
+              Text('AI').fontSize(9).fontColor(isDarkTheme() ? '#E5E5E7' : '#FFFFFF').margin({ top: 1 })
             }
             .width(48).height(48).borderRadius(24)
             .backgroundColor('#CC8B5CF6').justifyContent(FlexAlign.Center)
@@ -1654,7 +1664,7 @@ export struct MapPage {
             Blank()
             Column() {
               Text('🧭').fontSize(20)
-              Text('导航').fontSize(9).fontColor('#FFFFFF').margin({ top: 1 })
+              Text('导航').fontSize(9).fontColor(isDarkTheme() ? '#E5E5E7' : '#FFFFFF').margin({ top: 1 })
             }
             .width(48).height(48).borderRadius(24)
             .backgroundColor('#CC10B981').justifyContent(FlexAlign.Center)
@@ -1688,7 +1698,7 @@ export struct MapPage {
                 Row() {
                   Text('附近门店').fontSize(16).fontWeight(FontWeight.Bold)
                   Blank()
-                  Text('✕').fontSize(18).fontColor('#999')
+                  Text('✕').fontSize(18).fontColor(getTheme().textSecondary)
                     .onClick(() => { this.showRecPicker = false; })
                 }.width('100%').margin({ bottom: 10 })
                 Scroll() {
@@ -1696,8 +1706,8 @@ export struct MapPage {
                     ForEach(this.pickerGroup, (rec: Recommendation) => {
                       Row() {
                         Text(this.activityEmoji(rec.placeType) + ' ' + rec.placeName)
-                          .fontSize(15).fontColor('#222').layoutWeight(1)
-                        Text('›').fontSize(18).fontColor('#CCC')
+                          .fontSize(15).fontColor(getTheme().textPrimary).layoutWeight(1)
+                        Text('›').fontSize(18).fontColor(getTheme().textTertiary)
                       }
                       .width('100%').padding({ top: 12, bottom: 12 })
                       .border({ width: { bottom: 0.5 }, color: '#F0F0F0' })
@@ -1706,7 +1716,7 @@ export struct MapPage {
                   }
                 }.height(240)
               }
-              .padding(16).backgroundColor('#FFFFFF')
+              .padding(16).backgroundColor(getTheme().surface)
               .borderRadius({ topLeft: 16, topRight: 16 })
               .shadow({ radius: 8, color: '#20000000', offsetY: -2 })
             }
@@ -1724,7 +1734,7 @@ export struct MapPage {
                 Row() {
                   Text('🤖 足迹助手').fontSize(16).fontWeight(FontWeight.Bold)
                   Blank()
-                  Text('✕').fontSize(18).fontColor('#999')
+                  Text('✕').fontSize(18).fontColor(getTheme().textSecondary)
                     .onClick(() => { this.showChat = false; })
                 }.width('100%').margin({ bottom: 8 })
 
@@ -1735,15 +1745,15 @@ export struct MapPage {
                         if (bubble.role === 'user') {
                           // 用户消息靠右，紫色气泡
                           Blank()
-                          Text(bubble.content).fontSize(13).fontColor('#FFFFFF')
+                          Text(bubble.content).fontSize(13).fontColor(isDarkTheme() ? '#E5E5E7' : '#FFFFFF')
                             .padding(10).backgroundColor('#8B5CF6').borderRadius(12)
                             .maxLines(10).constraintSize({ maxWidth: '75%' })
                             .textOverflow({ overflow: TextOverflow.Clip })
                             .border({ width: 0.5, color: '#7C3AED' })
                         } else {
                           // AI 消息靠左，灰色气泡
-                          Text(bubble.content).fontSize(13).fontColor('#333')
-                            .padding(10).backgroundColor('#F0F2F5').borderRadius(12)
+                          Text(bubble.content).fontSize(13).fontColor(getTheme().textPrimary)
+                            .padding(10).backgroundColor(isDarkTheme() ? '#3A3A3C' : '#F0F2F5').borderRadius(12)
                             .maxLines(10).constraintSize({ maxWidth: '80%' })
                             .textOverflow({ overflow: TextOverflow.Clip })
                           Blank()
@@ -1764,7 +1774,7 @@ export struct MapPage {
                       }
                       .width('100%')
                       .padding({ left: 6, top: 6, bottom: 4 })
-                      .backgroundColor('#F3F0FF')
+                      .backgroundColor(isDarkTheme() ? '#2A2545' : '#F3F0FF')
                       .borderRadius(10)
                       .margin({ bottom: 4 })
                     }
@@ -1774,7 +1784,7 @@ export struct MapPage {
                 Row() {
                   TextInput({ placeholder: '输入指令...', text: this.chatInput })
                     .fontSize(13).height(36).layoutWeight(1)
-                    .backgroundColor('#F5F5F5').borderRadius(18).padding({ left: 12, right: 12 })
+                    .backgroundColor(getTheme().surfaceSecondary).borderRadius(18).padding({ left: 12, right: 12 })
                     .onChange((v: string) => { this.chatInput = v; })
                   Button('发送')
                     .fontSize(12).height(36).padding({ left: 12, right: 12 })
@@ -1782,7 +1792,7 @@ export struct MapPage {
                     .onClick(() => { this.sendChat(); })
                 }.width('100%')
               }
-              .padding(12).backgroundColor('#FFFFFF')
+              .padding(12).backgroundColor(getTheme().surface)
               .borderRadius({ topLeft: 16, topRight: 16 })
               .shadow({ radius: 8, color: '#20000000', offsetY: -2 })
             }
@@ -1798,7 +1808,7 @@ export struct MapPage {
                 Row() {
                   Text('🧭 导航').fontSize(16).fontWeight(FontWeight.Bold)
                   Blank()
-                  Text('✕').fontSize(18).fontColor('#999')
+                  Text('✕').fontSize(18).fontColor(getTheme().textSecondary)
                     .onClick(() => { this.showNavigation = false; this.clearNavigationRoute(); })
                 }.width('100%').margin({ bottom: 8 })
 
@@ -1808,7 +1818,7 @@ export struct MapPage {
                   Row() {
                     TextInput({ placeholder: '搜索目的地...', text: this.navSearchQuery })
                       .fontSize(13).height(36).layoutWeight(1)
-                      .backgroundColor('#F5F5F5').borderRadius(18).padding({ left: 12, right: 12 })
+                      .backgroundColor(getTheme().surfaceSecondary).borderRadius(18).padding({ left: 12, right: 12 })
                       .onChange((v: string) => { this.navSearchQuery = v; })
                     Button('搜索')
                       .fontSize(12).height(36).padding({ left: 10, right: 10 })
@@ -1827,11 +1837,11 @@ export struct MapPage {
                   // 起点信息
                   Row() {
                     Text('📍').fontSize(14)
-                    Text(this.navOriginName).fontSize(12).fontColor('#666')
+                    Text(this.navOriginName).fontSize(12).fontColor(getTheme().textSecondary)
                       .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                     Blank()
                     Text('点击地图选点').fontSize(10).fontColor('#10B981')
-                  }.width('100%').padding(8).backgroundColor('#F0FDF4').borderRadius(8).margin({ bottom: 6 })
+                  }.width('100%').padding(8).backgroundColor(isDarkTheme() ? '#1A2E24' : '#F0FDF4').borderRadius(8).margin({ bottom: 6 })
 
                   // 加载指示器
                   if (this.navIsSearching) {
@@ -1849,14 +1859,14 @@ export struct MapPage {
                         ForEach(this.navSearchResults, (poi: PoiResult) => {
                           Row() {
                             Column() {
-                              Text(poi.name).fontSize(14).fontColor('#222').maxLines(1)
+                              Text(poi.name).fontSize(14).fontColor(getTheme().textPrimary).maxLines(1)
                                 .textOverflow({ overflow: TextOverflow.Ellipsis })
-                              Text(poi.address || '').fontSize(11).fontColor('#999').maxLines(1)
+                              Text(poi.address || '').fontSize(11).fontColor(getTheme().textSecondary).maxLines(1)
                                 .textOverflow({ overflow: TextOverflow.Ellipsis })
                             }.layoutWeight(1).alignItems(HorizontalAlign.Start)
                             Text(poi.distance > 0 ? (poi.distance < 1000 ? Math.floor(poi.distance) + 'm' : (poi.distance / 1000).toFixed(1) + 'km') : '')
-                              .fontSize(11).fontColor('#AAA').margin({ right: 4 })
-                            Text('→').fontSize(18).fontColor('#CCC')
+                              .fontSize(11).fontColor(getTheme().textSecondary).margin({ right: 4 })
+                            Text('→').fontSize(18).fontColor(getTheme().textTertiary)
                           }
                           .width('100%').padding({ top: 10, bottom: 10 })
                           .border({ width: { bottom: 0.5 }, color: '#F0F0F0' })
@@ -1882,27 +1892,27 @@ export struct MapPage {
                     Column() {
                       Text(this.formatNavDistance(this.navRoute.distance))
                         .fontSize(22).fontWeight(FontWeight.Bold).fontColor('#10B981')
-                      Text('距离').fontSize(10).fontColor('#999')
+                      Text('距离').fontSize(10).fontColor(getTheme().textSecondary)
                     }.layoutWeight(1)
                     Column() {
                       Text(this.formatNavDuration(this.navRoute.duration))
                         .fontSize(22).fontWeight(FontWeight.Bold).fontColor('#10B981')
-                      Text('预计时间').fontSize(10).fontColor('#999')
+                      Text('预计时间').fontSize(10).fontColor(getTheme().textSecondary)
                     }.layoutWeight(1)
                     Column() {
                       Text(this.navRoute.steps.length.toString())
                         .fontSize(22).fontWeight(FontWeight.Bold).fontColor('#10B981')
-                      Text('步骤').fontSize(10).fontColor('#999')
+                      Text('步骤').fontSize(10).fontColor(getTheme().textSecondary)
                     }.layoutWeight(1)
-                  }.width('100%').padding(10).backgroundColor('#F0FDF4').borderRadius(10).margin({ bottom: 6 })
+                  }.width('100%').padding(10).backgroundColor(isDarkTheme() ? '#1A2E24' : '#F0FDF4').borderRadius(10).margin({ bottom: 6 })
 
                   // 起终点
                   Text('🟢 ' + this.navOriginName + '  →  🔴 ' + (this.navRoute.destination || '目的地'))
-                    .fontSize(11).fontColor('#666').width('100%').margin({ bottom: 6 })
+                    .fontSize(11).fontColor(getTheme().textSecondary).width('100%').margin({ bottom: 6 })
                     .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
 
                   // 步骤列表
-                  Text('导航步骤').fontSize(12).fontWeight(FontWeight.Medium).fontColor('#333')
+                  Text('导航步骤').fontSize(12).fontWeight(FontWeight.Medium).fontColor(getTheme().textPrimary)
                     .width('100%').margin({ bottom: 4 })
                   Scroll() {
                     Column() {
@@ -1910,14 +1920,14 @@ export struct MapPage {
                         Row() {
                           Text(this.navStepActionIcon(step.action)).fontSize(16).width(24)
                           Column() {
-                            Text(step.instruction || '继续前行').fontSize(12).fontColor('#333')
+                            Text(step.instruction || '继续前行').fontSize(12).fontColor(getTheme().textPrimary)
                               .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
                             if (step.road && step.road.length > 0) {
-                              Text(step.road).fontSize(10).fontColor('#999')
+                              Text(step.road).fontSize(10).fontColor(getTheme().textSecondary)
                             }
                           }.layoutWeight(1).alignItems(HorizontalAlign.Start)
                           Text(step.distance > 0 ? (step.distance < 1000 ? Math.floor(step.distance) + 'm' : (step.distance / 1000).toFixed(1) + 'km') : '')
-                            .fontSize(10).fontColor('#AAA')
+                            .fontSize(10).fontColor(getTheme().textSecondary)
                         }
                         .width('100%').padding({ top: 6, bottom: 6 })
                         .border({ width: { bottom: 0.5 }, color: '#F0F0F0' })
@@ -1932,17 +1942,17 @@ export struct MapPage {
                   Row() {
                     Button('清除路线')
                       .fontSize(12).height(34).layoutWeight(1)
-                      .backgroundColor('#F5F5F5').fontColor('#666').borderRadius(17)
+                      .backgroundColor(getTheme().surfaceSecondary).fontColor(getTheme().textSecondary).borderRadius(17)
                       .onClick(() => { this.clearNavigationRoute(); })
                     Button('换模式')
                       .fontSize(12).height(34).layoutWeight(1)
-                      .backgroundColor('#F5F5F5').fontColor('#333').borderRadius(17)
+                      .backgroundColor(getTheme().surfaceSecondary).fontColor(getTheme().textPrimary).borderRadius(17)
                       .onClick(() => { this.navRoute = null; })
                       .margin({ left: 6, right: 6 })
                   }.width('100%')
                 }
               }
-              .padding(12).backgroundColor('#FFFFFF')
+              .padding(12).backgroundColor(getTheme().surface)
               .borderRadius({ topLeft: 16, topRight: 16 })
               .shadow({ radius: 8, color: '#20000000', offsetY: -2 })
             }

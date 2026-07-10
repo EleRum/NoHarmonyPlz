@@ -101,6 +101,9 @@ export interface IMapService {
   /** 切换地图样式 */
   setMapType(type: MapType): void;
 
+  /** 设置深色/浅色地图风格 (amap://styles/dark | amap://styles/light) */
+  setMapStyle(style: string): void;
+
   // ─── POI 搜索（通过 JSAPI PlaceSearch） ───
 
   /** 周边搜索 */

@@ -1,8 +1,9 @@
-/**
+﻿/**
  * 时间线页面
  * 按天聚合：地点 + 行为标签 + 时间
  */
 import { Logger } from '../common/Logger';
+import { getTheme } from '../common/Theme';
 import router from '@ohos.router';
 import { Footprint } from '../model/Footprint';
 import { ActivitySegment } from '../model/ActivitySegment';
@@ -135,31 +136,19 @@ export struct TimelineContent {
 
   build() {
     Column() {
-      // 标题栏
-      Row() {
-        Text('←').fontSize(24).fontColor('#3B82F6')
-          .width(36).height(36)
-          .onClick(() => { this.onTabChange(0); })
-        Text('时间线')
-          .fontSize(22).fontWeight(FontWeight.Bold)
-          .margin({ left: 8 })
-      }
-      .width('100%')
-      .padding({ top: 16, bottom: 12, left: 16, right: 16 })
-
       if (this.isLoading) {
         Column() {
           LoadingProgress().width(36).height(36)
-          Text('加载中...').fontSize(14).fontColor('#999').margin({ top: 12 })
+          Text('加载中...').fontSize(14).fontColor(getTheme().textSecondary).margin({ top: 12 })
         }
         .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
       } else if (this.days.length === 0) {
         // 空状态
         Column() {
           Text('📭').fontSize(56).margin({ bottom: 12 })
-          Text('还没有足迹记录').fontSize(17).fontColor('#333')
+          Text('还没有足迹记录').fontSize(17).fontColor(getTheme().textPrimary)
           Text('开启后台定位后，您的出行记录会自动出现在这里')
-            .fontSize(13).fontColor('#999').margin({ top: 6 }).textAlign(TextAlign.Center)
+            .fontSize(13).fontColor(getTheme().textSecondary).margin({ top: 6 }).textAlign(TextAlign.Center)
             .padding({ left: 40, right: 40 })
         }
         .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
@@ -172,9 +161,9 @@ export struct TimelineContent {
                 // 日期头部
                 Row() {
                   Text(dayGroup.label)
-                    .fontSize(16).fontWeight(FontWeight.Medium).fontColor('#333')
+                    .fontSize(16).fontWeight(FontWeight.Medium).fontColor(getTheme().textPrimary)
                   Text(` · ${dayGroup.footprintCount}个足迹点`)
-                    .fontSize(13).fontColor('#999')
+                    .fontSize(13).fontColor(getTheme().textSecondary)
                 }
                 .width('100%').padding({ left: 16, right: 16, top: 14, bottom: 8 })
                 .backgroundColor('#F5F7FA')
@@ -195,7 +184,7 @@ export struct TimelineContent {
                       // 活动信息
                       Column() {
                         Text(seg.poiName || (ACTIVITY_LABELS[seg.activityType] || seg.activityType))
-                          .fontSize(15).fontWeight(FontWeight.Medium).fontColor('#222')
+                          .fontSize(15).fontWeight(FontWeight.Medium).fontColor(getTheme().textPrimary)
                           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
 
                         Row() {
@@ -210,16 +199,16 @@ export struct TimelineContent {
                           }
 
                           Text(` ${formatTimestamp(seg.startTime)} - ${formatTimestamp(seg.endTime)}`)
-                            .fontSize(12).fontColor('#999').margin({ left: 6 })
+                            .fontSize(12).fontColor(getTheme().textSecondary).margin({ left: 6 })
 
                           if (seg.photoCount > 0) {
-                            Text(` 📷${seg.photoCount}`).fontSize(12).fontColor('#999').margin({ left: 6 })
+                            Text(` 📷${seg.photoCount}`).fontSize(12).fontColor(getTheme().textSecondary).margin({ left: 6 })
                           }
                         }.margin({ top: 4 })
                       }
                       .alignItems(HorizontalAlign.Start).layoutWeight(1)
 
-                      Text('›').fontSize(18).fontColor('#CCC')
+                      Text('›').fontSize(18).fontColor(getTheme().textTertiary)
                     }
                     .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
                     .alignItems(VerticalAlign.Center)
@@ -248,7 +237,7 @@ export struct TimelineContent {
                 } else {
                   // 当天无活动片段
                   Text('仅有位置记录，暂无识别出的活动')
-                    .fontSize(12).fontColor('#BBB')
+                    .fontSize(12).fontColor(getTheme().textTertiary)
                     .padding({ left: 16, top: 8, bottom: 12 })
                     .width('100%')
                 }
@@ -262,6 +251,6 @@ export struct TimelineContent {
       }
 
     }
-    .width('100%').height('100%').backgroundColor('#FFFFFF')
+    .width('100%').height('100%').backgroundColor(getTheme().surface)
   }
 }

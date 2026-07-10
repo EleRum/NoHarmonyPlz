@@ -51,23 +51,23 @@ function makeLightColors(): ThemeColors {
 
 function makeDarkColors(): ThemeColors {
   const c: ThemeColors = new ThemeColors();
-  c.pageBg = '#1A1A1C';
-  c.surface = '#2C2C2E';
-  c.surfaceSecondary = '#3A3A3C';
+  c.pageBg = '#191919';
+  c.surface = '#262626';
+  c.surfaceSecondary = '#1E1E1F';
   c.primary = '#5B8DFF';
   c.primaryLight = '#1E2A45';
-  c.textPrimary = '#E5E5E7';
-  c.textSecondary = '#8E8E93';
-  c.textTertiary = '#636366';
-  c.border = '#38383A';
-  c.divider = '#2C2C2E';
+  c.textPrimary = '#E5E5E5';
+  c.textSecondary = '#98989D';
+  c.textTertiary = '#6E6E73';
+  c.border = '#333333';
+  c.divider = '#2C2C2C';
   c.success = '#30D158';
   c.danger = '#FF453A';
   c.warning = '#FF9F0A';
-  c.tabBarBg = '#2C2C2E';
+  c.tabBarBg = '#1F1F1F';
   c.overlay = '#B0000000';
-  c.toast = '#555555DD';
-  c.shadow = '#00000030';
+  c.toast = '#444444DD';
+  c.shadow = '#00000040';
   return c;
 }
 

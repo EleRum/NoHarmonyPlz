@@ -68,64 +68,58 @@ export struct ProfileContent {
 
   build() {
     Column() {
-      // 个人资料卡片（紧凑）
-      Row() {
-        Column() {
-          Text(this.profileName ? this.profileName.charAt(0).toUpperCase() : '👤')
-            .fontSize(18)
-            .fontColor('#FFFFFF')
-        }
-        .width(40).height(40)
-        .borderRadius(20)
-        .backgroundColor(getTheme().primary)
-        .justifyContent(FlexAlign.Center)
-        .margin({ right: SPACE.md })
-
-        Column() {
-          if (this.profileName) {
-            Text(this.profileName)
-              .fontSize(FONT.subheading)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(getTheme().textPrimary)
-            if (this.profileSummary) {
-              Text(this.profileSummary)
-                .fontSize(FONT.caption)
-                .fontColor(getTheme().textSecondary)
-            }
-          } else {
-            Text('未设置个人资料')
-              .fontSize(FONT.body)
-              .fontColor(getTheme().textSecondary)
+      // 个人资料 + 主题（合并卡片）
+      Column() {
+        Row() {
+          Column() {
+            Text(this.profileName ? this.profileName.charAt(0).toUpperCase() : '👤')
+              .fontSize(18).fontColor('#FFFFFF')
           }
+          .width(40).height(40).borderRadius(20)
+          .backgroundColor(getTheme().primary)
+          .justifyContent(FlexAlign.Center)
+          .margin({ right: SPACE.md })
+
+          Column() {
+            if (this.profileName) {
+              Text(this.profileName)
+                .fontSize(FONT.subheading).fontWeight(FontWeight.Medium)
+                .fontColor(getTheme().textPrimary)
+              if (this.profileSummary) {
+                Text(this.profileSummary)
+                  .fontSize(FONT.caption).fontColor(getTheme().textSecondary)
+              }
+            } else {
+              Text('未设置个人资料')
+                .fontSize(FONT.body).fontColor(getTheme().textSecondary)
+            }
+          }
+          .alignItems(HorizontalAlign.Start).layoutWeight(1)
+
+          Text('编辑 ›')
+            .fontSize(FONT.caption).fontColor(getTheme().primary)
+            .onClick(() => { this.editProfile(); })
         }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
+        .width('100%').margin({ bottom: SPACE.sm })
 
-        Text('编辑 ›')
-          .fontSize(FONT.caption)
-          .fontColor(getTheme().primary)
-          .onClick(() => { this.editProfile(); })
+        Divider().color(getTheme().divider).height(0.5).margin({ bottom: SPACE.sm })
+
+        Row() {
+          Text(isDarkTheme() ? '🌙 深色模式' : '☀️ 浅色模式')
+            .fontSize(FONT.caption).fontColor(getTheme().textSecondary)
+          Blank()
+          Toggle({ type: ToggleType.Switch, isOn: isDarkTheme() })
+            .onChange((isOn: boolean) => { toggleTheme(); }).height(28)
+        }
+        .width('100%')
       }
       .width('100%')
-      .padding({ left: SPACE.lg, right: SPACE.lg, top: SPACE.md, bottom: SPACE.md })
+      .padding(SPACE.lg)
       .backgroundColor(getTheme().surface)
+      .borderRadius(RADIUS.lg)
+      .margin({ left: SPACE.lg, right: SPACE.lg, top: SPACE.lg })
 
-      // 深色模式开关 + 推荐开关
-      Row() {
-        Text(isDarkTheme() ? '🌙 深色模式' : '☀️ 浅色模式')
-          .fontSize(FONT.caption)
-          .fontColor(getTheme().textSecondary)
-        Blank()
-        Toggle({ type: ToggleType.Switch, isOn: isDarkTheme() })
-          .onChange((isOn: boolean) => { toggleTheme(); })
-          .height(28)
-      }
-      .width('100%')
-      .padding({ left: SPACE.lg, right: SPACE.lg, top: SPACE.sm, bottom: SPACE.sm })
-      .backgroundColor(getTheme().surface)
-
-      Divider().color(getTheme().divider).height(0.5)
-        .margin({ left: SPACE.lg, right: SPACE.lg })
+      Row().width('100%').height(SPACE.sm)
 
       // 设置内容（占据剩余空间，自带 Scroll）
       SettingsContent({ profileRefreshKey: this.profileRefreshKey })
