@@ -162,6 +162,7 @@ export class ClaudeService {
   }
 
   get hasKey(): boolean { return this.apiKey.length > 0; }
+  getApiKey(): string { return this.apiKey; }
 
   get providerType(): string { return this.provider; }
 

@@ -47,6 +47,7 @@ export struct SettingsContent {
   onTabChange: (index: number) => void = () => {};
   @Prop @Watch('onProfileRefresh') profileRefreshKey: number = 0;
   @State apiKey: string = '';
+  @State realApiKey: string = '';
   @State providerName: string = '';
   @State hasKey: boolean = false;
   @State isSaving: boolean = false;
@@ -96,6 +97,7 @@ export struct SettingsContent {
       this.selectedProvider = currentProvider;
     }
     if (this.hasKey) {
+      this.realApiKey = this.claude.getApiKey();
       this.apiKey = '••••••••••••••••••••';
     }
     // 加载当前选中 provider 的自定义配置
@@ -302,7 +304,10 @@ export struct SettingsContent {
                 Text(this.showKey ? '🙈' : '👁️').fontSize(14)
                 Text(this.showKey ? '隐藏' : '显示').fontSize(12).fontColor(getTheme(this.themeMode).textSecondary).margin({ left: 4 })
               }
-              .onClick(() => { this.showKey = !this.showKey; })
+              .onClick(() => {
+                this.showKey = !this.showKey;
+                this.apiKey = this.showKey ? this.realApiKey : '••••••••••••••••••••';
+              })
               Blank()
               if (this.hasKey) {
                 Button('清除密钥')
@@ -335,9 +340,11 @@ export struct SettingsContent {
 
             this.CardSpacer()
             this.CardSpacer()
+            Divider().color(getTheme(this.themeMode).divider).height(0.5)
+              .margin({ left: 16, right: 16, top: 8, bottom: 8 })
 
             // ─── 推荐设置 ───
-            this.CardTitle('🔔 推荐设置', '')
+            this.CardTitle('🔔 推荐', '')
             this.CardSpacer()
 
             Row() {
@@ -378,6 +385,8 @@ export struct SettingsContent {
 
             this.CardSpacer()
             this.CardSpacer()
+            Divider().color(getTheme(this.themeMode).divider).height(0.5)
+              .margin({ left: 16, right: 16, top: 8, bottom: 8 })
             this.CardTitle('📱 关于', '足迹地图 v2.0.1')
             this.CardSpacer()
             Column() {

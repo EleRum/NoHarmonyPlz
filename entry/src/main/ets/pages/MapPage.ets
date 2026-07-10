@@ -1995,23 +1995,22 @@ export struct MapPage {
   @Builder
   BuildTab(icon: string, label: string, idx: number) {
     Column() {
+      Text(icon).fontSize(20)
+        .opacity(this.currentTab === idx ? 1.0 : 0.4)
+      Text(label).fontSize(FONT.label)
+        .fontColor(this.currentTab === idx ? getTheme(this.themeMode).primary : getTheme(this.themeMode).textTertiary)
+        .fontWeight(this.currentTab === idx ? FontWeight.Medium : FontWeight.Normal)
+        .margin({ top: 2 })
       if (this.currentTab === idx) {
-        Row() {
-          Text(icon).fontSize(16)
-          Text(label).fontSize(11).fontWeight(FontWeight.Medium).margin({ left: 4 })
-        }
-        .padding({ left: 14, right: 14, top: 6, bottom: 6 })
-        .borderRadius(RADIUS.pill)
-        .backgroundColor(getTheme(this.themeMode).primary)
-      } else {
-        Column() {
-          Text(icon).fontSize(18).opacity(0.5)
-          Text(label).fontSize(FONT.label).fontColor(getTheme(this.themeMode).textTertiary)
-        }
+        Row().width(20).height(3)
+          .backgroundColor(getTheme(this.themeMode).primary)
+          .borderRadius(2)
+          .margin({ top: 4 })
       }
     }
     .layoutWeight(1).height('100%')
     .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
     .onClick(() => { this.switchTab(idx); })
   }
 }

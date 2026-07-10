@@ -264,8 +264,8 @@ export class TourGuideAgent {
   /** 执行工具并返回结果（含地图更新数据 + AI 继续对话） */
   async executeToolAndContinue(action: string, params: Record<string, string>): Promise<AgentResponse> {
     this.toolCallCount++;
-    if (this.toolCallCount > 10) {
-      return { text: '规划进行中，请告诉我接下来想做什么？' };
+    if (this.toolCallCount > 30) {
+      return { text: '已进行较多操作，请确认当前的行程计划，或继续告诉我你的需求。' };
     }
 
     let resultText: string = '';
