@@ -47,7 +47,6 @@ export struct SettingsContent {
   onTabChange: (index: number) => void = () => {};
   @Prop @Watch('onProfileRefresh') profileRefreshKey: number = 0;
   @State apiKey: string = '';
-  @State realApiKey: string = '';
   @State providerName: string = '';
   @State hasKey: boolean = false;
   @State isSaving: boolean = false;
@@ -97,8 +96,7 @@ export struct SettingsContent {
       this.selectedProvider = currentProvider;
     }
     if (this.hasKey) {
-      this.realApiKey = this.claude.getApiKey();
-      this.apiKey = '••••••••••••••••••••';
+      this.apiKey = this.claude.getApiKey();
     }
     // 加载当前选中 provider 的自定义配置
     this.refreshProviderFields();
@@ -168,7 +166,7 @@ export struct SettingsContent {
       this.showToast('请输入密钥');
       return;
     }
-    if (raw.startsWith('••••')) {
+    if (raw === this.claude.getApiKey()) {
       this.showToast('密钥未修改');
       return;
     }
@@ -196,7 +194,7 @@ export struct SettingsContent {
       );
       this.hasKey = true;
       this.providerName = this.claude.providerName;
-      this.apiKey = '••••••••••••••••••••';
+      this.showKey = false;
       this.showToast('密钥已保存 ✅');
     } catch (e) {
       Logger.error(TAG, 'Failed to save key: %{public}s', JSON.stringify(e));
@@ -304,10 +302,7 @@ export struct SettingsContent {
                 Text(this.showKey ? '🙈' : '👁️').fontSize(14)
                 Text(this.showKey ? '隐藏' : '显示').fontSize(12).fontColor(getTheme(this.themeMode).textSecondary).margin({ left: 4 })
               }
-              .onClick(() => {
-                this.showKey = !this.showKey;
-                this.apiKey = this.showKey ? this.realApiKey : '••••••••••••••••••••';
-              })
+              .onClick(() => { this.showKey = !this.showKey; })
               Blank()
               if (this.hasKey) {
                 Button('清除密钥')
