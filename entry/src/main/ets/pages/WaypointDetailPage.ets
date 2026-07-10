@@ -13,7 +13,7 @@ import { ActivitySegment } from '../model/ActivitySegment';
 import { Dao } from '../database/Dao';
 import { CalibrationSignal } from '../common/CalibrationSignal';
 import { Logger } from '../common/Logger';
-import { getTheme } from '../common/Theme';
+import { getTheme, isDarkTheme } from '../common/Theme';
 
 const TAG = 'WaypointDetail';
 
@@ -251,7 +251,7 @@ struct WaypointDetailPage {
           .layoutWeight(1).textAlign(TextAlign.Center)
         // 编辑按钮 — 始终显示，无 segmentStartTime 时用 timestamp 作为锚点
         Button() { Text(this.isCalibrated ? '✏️ 已校准' : '✏️ 编辑').fontSize(12).fontColor('#3B82F6') }
-          .backgroundColor('#EBF3FF').borderRadius(12).height(28).padding({ left: 10, right: 10 })
+          .backgroundColor(getTheme(this.themeMode).primaryLight).borderRadius(12).height(28).padding({ left: 10, right: 10 })
           .onClick(() => {
             // 如果没有段锚点，用足迹时间戳作为校准锚点
             if (!this.data.segmentStartTime) {
@@ -313,7 +313,7 @@ struct WaypointDetailPage {
                   Text(ACTIVITY_LABELS[this.displayActivityTag] || this.displayActivityTag)
                     .fontSize(12).fontColor('#3B82F6')
                     .padding({ left: 8, right: 8, top: 2, bottom: 2 })
-                    .backgroundColor('#EBF3FF').borderRadius(8)
+                    .backgroundColor(getTheme(this.themeMode).primaryLight).borderRadius(8)
                 }
                 if (this.isCalibrated) {
                   Text('✅ 已校准')
@@ -421,8 +421,8 @@ struct WaypointDetailPage {
                   Text(opt.label).fontSize(10).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 2 })
                 }
                 .layoutWeight(1).padding({ top: 10, bottom: 10 })
-                .backgroundColor(opt.type === this.displayActivityTag ? '#EBF3FF' : getTheme(this.themeMode).surfaceSecondary)
-                .border({ width: 1, color: opt.type === this.displayActivityTag ? '#3B82F6' : getTheme(this.themeMode).border })
+                .backgroundColor(opt.type === this.displayActivityTag ? getTheme(this.themeMode).primaryLight : getTheme(this.themeMode).surfaceSecondary)
+                .border({ width: 1, color: opt.type === this.displayActivityTag ? getTheme(this.themeMode).primary : getTheme(this.themeMode).border })
                 .borderRadius(10).margin({ left: 2, right: 2 })
                 .onClick(() => { this.doCalibrateType(opt.type); })
               })
@@ -435,8 +435,8 @@ struct WaypointDetailPage {
                   Text(opt.label).fontSize(10).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 2 })
                 }
                 .layoutWeight(1).padding({ top: 10, bottom: 10 })
-                .backgroundColor(opt.type === this.displayActivityTag ? '#EBF3FF' : getTheme(this.themeMode).surfaceSecondary)
-                .border({ width: 1, color: opt.type === this.displayActivityTag ? '#3B82F6' : getTheme(this.themeMode).border })
+                .backgroundColor(opt.type === this.displayActivityTag ? getTheme(this.themeMode).primaryLight : getTheme(this.themeMode).surfaceSecondary)
+                .border({ width: 1, color: opt.type === this.displayActivityTag ? getTheme(this.themeMode).primary : getTheme(this.themeMode).border })
                 .borderRadius(10).margin({ left: 2, right: 2 })
                 .onClick(() => { this.doCalibrateType(opt.type); })
               })
@@ -446,22 +446,22 @@ struct WaypointDetailPage {
             Text('').height(1).width('100%').backgroundColor('#EEE').margin({ top: 14, bottom: 14 })
 
             // ── 更多操作 ──
-            this.CalActionBtn('✏️ 修改地点名称', '#3B82F6', '#EBF3FF', () => {
+            this.CalActionBtn('✏️ 修改地点名称', getTheme(this.themeMode).primary, getTheme(this.themeMode).primaryLight, () => {
               this.editPoiName = this.displayPoiName;
               this.showRenameInput = true;
             })
 
-            this.CalActionBtn('🗑️ 删除此活动段', '#EF4444', '#FEF2F2', () => {
+            this.CalActionBtn('🗑️ 删除此活动段', '#EF4444', isDarkTheme() ? '#2A1515' : '#FEF2F2', () => {
               this.showDeleteConfirm = true;
             })
 
             if (this.isCalibrated) {
-              this.CalActionBtn('🔄 恢复 AI 分类', '#F59E0B', '#FFFBEB', () => {
+              this.CalActionBtn('🔄 恢复 AI 分类', '#F59E0B', isDarkTheme() ? '#2A2010' : '#FFFBEB', () => {
                 this.doResetCalibration();
               })
             }
 
-            this.CalActionBtn('关闭', '#666', '#F0F0F0', () => {
+            this.CalActionBtn('关闭', getTheme(this.themeMode).textSecondary, isDarkTheme() ? '#3A3A3C' : '#F0F0F0', () => {
               this.showEditSheet = false;
             })
           }
@@ -493,7 +493,7 @@ struct WaypointDetailPage {
                 .margin({ right: 8 })
                 .onClick(() => { this.showRenameInput = false; })
               Button('确定').fontSize(14).fontColor('#FFFFFF')
-                .backgroundColor('#3B82F6').borderRadius(8).height(40).layoutWeight(1)
+                .backgroundColor(getTheme(this.themeMode).primary).borderRadius(8).height(40).layoutWeight(1)
                 .margin({ left: 8 })
                 .onClick(() => {
                   this.showRenameInput = false;

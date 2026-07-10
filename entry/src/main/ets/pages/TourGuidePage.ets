@@ -503,7 +503,7 @@ export struct TourGuideContent {
 
         if (!this.isMapReady) {
           Column() {
-            LoadingProgress().width(32).height(32).color('#10B981')
+            LoadingProgress().width(32).height(32).color('#8B5CF6')
             Text('地图加载中...').fontSize(13).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 8 })
           }
           .width('100%').height('100%').justifyContent(FlexAlign.Center)
@@ -604,7 +604,7 @@ export struct TourGuideContent {
               this.selectedDayIndex = 0;
             })
           if (this.isAiThinking) {
-            LoadingProgress().width(14).height(14).color('#10B981')
+            LoadingProgress().width(14).height(14).color('#8B5CF6')
           }
         }.width('100%').margin({ bottom: 4 })
 
@@ -615,11 +615,11 @@ export struct TourGuideContent {
                 if (bubble.role === 'user') {
                   Blank()
                   Text(bubble.content).fontSize(12).fontColor('#FFFFFF')
-                    .padding(8).backgroundColor('#10B981').borderRadius(10)
+                    .padding(8).backgroundColor('#8B5CF6').borderRadius(10)
                     .maxLines(20).constraintSize({ maxWidth: '80%' })
                 } else {
                   Text(bubble.content).fontSize(12).fontColor(getTheme(this.themeMode).textPrimary)
-                    .padding(8).backgroundColor(isDarkTheme() ? '#1A2E24' : '#F0FDF4').borderRadius(10)
+                    .padding(8).backgroundColor(isDarkTheme() ? '#3A3A3C' : '#F0F2F5').borderRadius(10)
                     .maxLines(25).constraintSize({ maxWidth: '85%' })
                   Blank()
                 }
@@ -633,10 +633,10 @@ export struct TourGuideContent {
             Row() {
               ForEach(this.quickReplies, (label: string) => {
                 Text(label)
-                  .fontSize(12).fontColor('#10B981')
+                  .fontSize(12).fontColor('#8B5CF6')
                   .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-                  .backgroundColor(isDarkTheme() ? '#1A2E24' : '#F0FDF4').borderRadius(14)
-                  .border({ width: 1, color: '#10B98140' })
+                  .backgroundColor(isDarkTheme() ? '#3A3A3C' : '#F0F2F5').borderRadius(14)
+                  .border({ width: 1, color: '#8B5CF640' })
                   .margin({ right: 6 })
                   .onClick(() => { this.onQuickReply(label); })
               })
@@ -646,12 +646,12 @@ export struct TourGuideContent {
 
         Row() {
           TextInput({ placeholder: '告诉小途你的旅行计划...', text: this.chatInput })
-            .fontSize(13).placeholderColor(getTheme(this.themeMode).textTertiary).height(34).layoutWeight(1)
+            .fontSize(13).fontColor(getTheme(this.themeMode).textPrimary).placeholderColor(getTheme(this.themeMode).textTertiary).height(34).layoutWeight(1)
             .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(17).padding({ left: 12, right: 12 })
             .onChange((v: string) => { this.chatInput = v; })
           Button('发送')
             .fontSize(12).height(34).padding({ left: 12, right: 12 })
-            .backgroundColor('#10B981').borderRadius(17)
+            .backgroundColor('#8B5CF6').borderRadius(17)
             .onClick(() => { this.sendMessage(); })
         }.width('100%')
       }

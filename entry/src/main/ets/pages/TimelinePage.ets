@@ -192,7 +192,7 @@ export struct TimelineContent {
                           Text(ACTIVITY_LABELS[seg.activityType] || seg.activityType)
                             .fontSize(12).fontColor('#4A90D9')
                             .padding({ left: 6, right: 6, top: 1, bottom: 1 })
-                            .backgroundColor('#EBF3FF').borderRadius(4)
+                            .backgroundColor(getTheme(this.themeMode).primaryLight).borderRadius(4)
 
                           // 校准标记
                           if (this.isSegCalibrated(dayGroup.dayKey, seg.startTime)) {
