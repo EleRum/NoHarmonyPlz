@@ -54,6 +54,8 @@ export interface AgentContext {
   lastSegmentType: string; lastSegmentPoi: string;
   lastSegmentLat: number; lastSegmentLng: number;
   todayDistance: number; todaySegCount: number; footprintCount: number;
+  /** 用户基础信息（软引导，不强制） */
+  userName: string; userCity: string; userPreferences: string;
 }
 
 export interface AgentReply {
@@ -73,7 +75,7 @@ export class AiAgent {
 
   constructor(dao: Dao) {
     this.dao = dao;
-    this.ctx = { lastSegmentType:'', lastSegmentPoi:'', lastSegmentLat:0, lastSegmentLng:0, todayDistance:0, todaySegCount:0, footprintCount:0 };
+    this.ctx = { lastSegmentType:'', lastSegmentPoi:'', lastSegmentLat:0, lastSegmentLng:0, todayDistance:0, todaySegCount:0, footprintCount:0, userName:'', userCity:'', userPreferences:'' };
     this.claude.loadApiKey();
   }
 
@@ -85,6 +87,9 @@ export class AiAgent {
     if (ctx.todayDistance !== undefined) this.ctx.todayDistance = ctx.todayDistance;
     if (ctx.todaySegCount !== undefined) this.ctx.todaySegCount = ctx.todaySegCount;
     if (ctx.footprintCount !== undefined) this.ctx.footprintCount = ctx.footprintCount;
+    if (ctx.userName !== undefined) this.ctx.userName = ctx.userName;
+    if (ctx.userCity !== undefined) this.ctx.userCity = ctx.userCity;
+    if (ctx.userPreferences !== undefined) this.ctx.userPreferences = ctx.userPreferences;
   }
 
   // 确认词列表
@@ -128,7 +133,17 @@ export class AiAgent {
 
     // ── 尝试 AI 在线模式（传全部天数据）──
     if (this.allSegs.length > 0) {
-      const ctxInfo: string = `${this.ctx.footprintCount}足迹点 ${this.allSegs.length}个活动段（跨${new Set(this.dayForAllSegs).size}天）`;
+      let ctxInfo: string = `${this.ctx.footprintCount}足迹点 ${this.allSegs.length}个活动段（跨${new Set(this.dayForAllSegs).size}天）`;
+      // 添加用户基础信息作为软引导
+      if (this.ctx.userName) {
+        ctxInfo += ` 用户:${this.ctx.userName}`;
+      }
+      if (this.ctx.userCity) {
+        ctxInfo += ` 城市:${this.ctx.userCity}`;
+      }
+      if (this.ctx.userPreferences) {
+        ctxInfo += ` 偏好:${this.ctx.userPreferences}(仅供参考,保持推荐多样性)`;
+      }
       const cr: ClaudeReply = await this.claude.chat(m, this.allSegs, ctxInfo);
       if (cr.text.length > 0) {
         // 处理 AI 结构化响应

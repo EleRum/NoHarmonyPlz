@@ -13,6 +13,7 @@ import {
   LatLng, MapInitConfig, NavRoute, DirectionMode, PoiResult
 } from '../services/map/MapTypes';
 import { TourPlan, TourDay } from '../model/TourPlan';
+import { UserBasicInfo } from '../model/UserBasicInfo';
 import { Dao } from '../database/Dao';
 
 const TAG = 'TourGuidePage';
@@ -77,6 +78,20 @@ export struct TourGuideContent {
         }
       } catch (_e) { /* ignore */ }
     }
+
+    // 加载用户偏好到"小途"agent（软引导，不强制）
+    try {
+      const dao = Dao.getInstance();
+      const userInfo: UserBasicInfo | null = await dao.queryUserBasicInfo();
+      if (userInfo) {
+        this.agent.setUserContext(
+          userInfo.username || '',
+          userInfo.city || '',
+          userInfo.getPreferenceTags()
+        );
+        Logger.info(TAG, 'User context set for TourGuideAgent');
+      }
+    } catch (_e) { /* ignore */ }
 
     if (this.chatMessages.length === 0) {
       this.chatMessages = [

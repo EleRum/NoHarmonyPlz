@@ -86,6 +86,8 @@ export class TourGuideAgent {
   private claude: ClaudeService;
   private plan: TourPlan;
   private toolCallCount: number;
+  /** 用户偏好上下文（软件引导，不强制） */
+  private userPrefContext: string = '';
 
   constructor() {
     this.claude = new ClaudeService();
@@ -102,6 +104,33 @@ export class TourGuideAgent {
 
   getPlan(): TourPlan {
     return this.plan;
+  }
+
+  /**
+   * 设置用户偏好上下文（软件引导，不强制限制推荐）
+   * @param userName 用户名
+   * @param userCity 用户所在城市
+   * @param preferences 偏好标签数组
+   */
+  setUserContext(userName: string, userCity: string, preferences: string[]): void {
+    const parts: string[] = [];
+    if (userName) parts.push(`用户叫${userName}`);
+    if (userCity) parts.push(`常住${userCity}`);
+    if (preferences.length > 0) {
+      parts.push(`旅行偏好：${preferences.join('、')}`);
+    }
+    if (parts.length > 0) {
+      this.userPrefContext = '\n## 用户信息（仅供参考，保持推荐多样性）\n' +
+        parts.join('，') + '。\n' +
+        '这些偏好仅作参考，你应根据目的地实际情况自由推荐，不要局限于用户偏好。\n';
+    } else {
+      this.userPrefContext = '';
+    }
+  }
+
+  /** 获取完整的系统提示（含用户偏好） */
+  private getSystemPrompt(): string {
+    return SYSTEM_PROMPT + this.userPrefContext;
   }
 
   /** 检测是否为新规划请求（更换城市/重新规划）
@@ -216,14 +245,14 @@ export class TourGuideAgent {
       Logger.info(TAG, 'Modification intent detected: %{public}s', modIntent.action);
       // 仍然发送给 AI 获取对话文本
       const userMsg: string = '用户: ' + input;
-      const reply: ClaudeReply = await this.claude.chatConversation(userMsg, SYSTEM_PROMPT);
+      const reply: ClaudeReply = await this.claude.chatConversation(userMsg, this.getSystemPrompt());
       const text: string = reply.text || '好的，马上更新！';
       // AI 文本 + 确定性工具调用
       return { text: this.stripJson(text), toolCall: modIntent };
     }
 
     const userMsg: string = '用户: ' + input;
-    const reply: ClaudeReply = await this.claude.chatConversation(userMsg, SYSTEM_PROMPT);
+    const reply: ClaudeReply = await this.claude.chatConversation(userMsg, this.getSystemPrompt());
     const text: string = reply.text || '抱歉，我暂时无法回复。';
     const toolCall: ToolCall | undefined = this.parseToolCall(text);
     if (toolCall) {

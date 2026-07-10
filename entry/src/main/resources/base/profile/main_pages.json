@@ -1,6 +1,8 @@
 {
   "src": [
     "pages/MapPage",
-    "pages/WaypointDetailPage"
+    "pages/WelcomePage",
+    "pages/WaypointDetailPage",
+    "pages/UserProfilePage"
   ]
 }

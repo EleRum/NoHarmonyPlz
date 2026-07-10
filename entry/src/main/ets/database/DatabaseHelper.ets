@@ -11,7 +11,8 @@ import {
   TABLE_ACTIVITY_SEGMENT,
   TABLE_USER_PROFILE,
   TABLE_RECOMMENDATION,
-  TABLE_SEGMENT_CALIBRATION
+  TABLE_SEGMENT_CALIBRATION,
+  TABLE_USER_BASIC_INFO
 } from '../common/Constants';
 
 const TAG = 'DatabaseHelper';
@@ -126,12 +127,26 @@ export class DatabaseHelper {
       )
     `;
 
+    const createUserBasicInfoSQL: string = `
+      CREATE TABLE IF NOT EXISTS ${TABLE_USER_BASIC_INFO} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT DEFAULT '',
+        age INTEGER DEFAULT 0,
+        city TEXT DEFAULT '',
+        gender TEXT DEFAULT '',
+        travel_preferences TEXT DEFAULT '[]',
+        created_at INTEGER DEFAULT 0,
+        updated_at INTEGER DEFAULT 0
+      )
+    `;
+
     try {
       await this.db.executeSql(createFootprintSQL);
       await this.db.executeSql(createActivitySegmentSQL);
       await this.db.executeSql(createUserProfileSQL);
       await this.db.executeSql(createRecommendationSQL);
       await this.db.executeSql(createSegmentCalibrationSQL);
+      await this.db.executeSql(createUserBasicInfoSQL);
 
       // 创建索引
       await this.db.executeSql(

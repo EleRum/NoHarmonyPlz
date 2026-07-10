@@ -3,8 +3,10 @@
  * 支持 Claude / DeepSeek / 华为盘古，全部可自定义端点和模型名
  */
 import { Logger } from '../common/Logger';
+import router from '@ohos.router';
 import { ClaudeService } from '../services/ClaudeService';
 import { Dao } from '../database/Dao';
+import { UserBasicInfo } from '../model/UserBasicInfo';
 
 const TAG = 'SettingsPage';
 
@@ -40,6 +42,7 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
 @Component
 export struct SettingsContent {
   onTabChange: (index: number) => void = () => {};
+  @Prop @Watch('onProfileRefresh') profileRefreshKey: number = 0;
   @State apiKey: string = '';
   @State providerName: string = '';
   @State hasKey: boolean = false;
@@ -50,6 +53,9 @@ export struct SettingsContent {
   @State selectedProvider: AiProvider = 'deepseek';
   @State customEndpoint: string = '';
   @State customModel: string = '';
+  // ─── 用户资料 ───
+  @State profileName: string = '';
+  @State profileSummary: string = '';
 
   private claude: ClaudeService = new ClaudeService();
   private dao: Dao = Dao.getInstance();
@@ -57,6 +63,7 @@ export struct SettingsContent {
   aboutToAppear(): void {
     Logger.info(TAG, 'SettingsPage aboutToAppear');
     this.loadKey();
+    this.loadProfile();
   }
 
   async loadKey(): Promise<void> {
@@ -72,6 +79,39 @@ export struct SettingsContent {
     }
     // 加载当前选中 provider 的自定义配置
     this.refreshProviderFields();
+  }
+
+  async loadProfile(): Promise<void> {
+    try {
+      const info: UserBasicInfo | null = await this.dao.queryUserBasicInfo();
+      if (info && info.hasBasicInfo()) {
+        this.profileName = info.username || '未命名';
+        const parts: string[] = [];
+        if (info.age > 0) parts.push(`${info.age}岁`);
+        if (info.city.length > 0) parts.push(info.city);
+        if (info.gender.length > 0) parts.push(info.gender === '男' ? '♂' : info.gender === '女' ? '♀' : info.gender);
+        this.profileSummary = parts.join(' · ');
+      } else {
+        this.profileName = '';
+        this.profileSummary = '';
+      }
+    } catch (e) {
+      Logger.warn(TAG, 'Failed to load profile');
+    }
+  }
+
+  editProfile(): void {
+    router.pushUrl({
+      url: 'pages/UserProfilePage'
+    }).catch((err: Error) => {
+      Logger.error(TAG, 'Failed to navigate to UserProfilePage: %{public}s', err.message);
+    });
+  }
+
+  /** 收到资料刷新信号时重新加载 */
+  onProfileRefresh(): void {
+    Logger.info(TAG, 'Profile refresh triggered');
+    this.loadProfile();
   }
 
   /** 选中 provider 变化时，刷新端点和模型输入框 */
@@ -169,6 +209,40 @@ export struct SettingsContent {
 
         Scroll() {
           Column() {
+            // ─── 用户资料 ───
+            this.CardTitle('👤 个人资料', this.profileSummary || '未设置')
+            this.CardSpacer()
+
+            Row() {
+              if (this.profileName) {
+                Column() {
+                  Text(this.profileName)
+                    .fontSize(16).fontWeight(FontWeight.Medium).fontColor('#1A1A1A')
+                  if (this.profileSummary) {
+                    Text(this.profileSummary)
+                      .fontSize(12).fontColor('#888').margin({ top: 4 })
+                  }
+                }
+                .alignItems(HorizontalAlign.Start).layoutWeight(1)
+              } else {
+                Text('尚未设置个人资料')
+                  .fontSize(14).fontColor('#AAA')
+                  .layoutWeight(1)
+              }
+
+              Button('编辑资料')
+                .fontSize(12).fontColor('#3B82F6')
+                .backgroundColor('#EBF3FF')
+                .borderRadius(8).height(34)
+                .onClick(() => { this.editProfile(); })
+            }
+            .width('100%').padding(16)
+            .backgroundColor('#FFFFFF').borderRadius(10)
+            .border({ width: 0.5, color: '#F0F0F0' })
+
+            this.CardSpacer()
+            this.CardSpacer()
+
             // ─── AI 密钥 ───
             this.CardTitle('🤖 AI 密钥', '支持 Claude / DeepSeek / 华为盘古')
             this.CardSpacer()

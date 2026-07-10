@@ -9,6 +9,7 @@ import { IDatabase, IResultSet, ValueType, ValuesBucket } from '../platform/data
 import { Footprint } from '../model/Footprint';
 import { ActivitySegment } from '../model/ActivitySegment';
 import { UserProfile } from '../model/UserProfile';
+import { UserBasicInfo } from '../model/UserBasicInfo';
 import { Recommendation } from '../model/Recommendation';
 import { SegmentCalibration } from '../model/SegmentCalibration';
 import {
@@ -17,6 +18,7 @@ import {
   TABLE_USER_PROFILE,
   TABLE_RECOMMENDATION,
   TABLE_SEGMENT_CALIBRATION,
+  TABLE_USER_BASIC_INFO,
   APP_TAG
 } from '../common/Constants';
 
@@ -523,6 +525,77 @@ export class Dao {
       return null;
     } catch (err) {
       Logger.error(TAG, 'queryUserProfile failed: %{public}s', JSON.stringify(err));
+      return null;
+    }
+  }
+
+  // ════════════════════════════════════════════════════════
+  //  UserBasicInfo CRUD
+  // ════════════════════════════════════════════════════════
+
+  /** 保存/更新用户基础信息（单行模式，始终操作 id=1 的行） */
+  async upsertUserBasicInfo(info: UserBasicInfo): Promise<void> {
+    const db = this.getDb();
+    if (!db) return;
+
+    try {
+      // 查找是否已有记录
+      const rs = await db.querySql(
+        `SELECT id FROM ${TABLE_USER_BASIC_INFO} LIMIT 1`
+      );
+      const exists: boolean = rs.goToNextRow();
+      let existingId: number = 0;
+      if (exists) {
+        existingId = rs.getLong(0);
+      }
+      rs.close();
+
+      info.updatedAt = Date.now();
+
+      if (exists) {
+        // 更新已有行
+        await db.update(
+          TABLE_USER_BASIC_INFO,
+          {
+            'username': info.username,
+            'age': info.age,
+            'city': info.city,
+            'gender': info.gender,
+            'travel_preferences': info.travelPreferences,
+            'updated_at': info.updatedAt
+          },
+          'id = ?',
+          [existingId]
+        );
+      } else {
+        // 插入新行
+        info.createdAt = Date.now();
+        await db.insert(TABLE_USER_BASIC_INFO, info.toValuesBucket());
+      }
+      Logger.info(TAG, 'upsertUserBasicInfo success');
+    } catch (err) {
+      Logger.error(TAG, 'upsertUserBasicInfo failed: %{public}s', JSON.stringify(err));
+    }
+  }
+
+  /** 查询用户基础信息（单行） */
+  async queryUserBasicInfo(): Promise<UserBasicInfo | null> {
+    const db = this.getDb();
+    if (!db) return null;
+
+    try {
+      const rs = await db.querySql(
+        `SELECT * FROM ${TABLE_USER_BASIC_INFO} LIMIT 1`
+      );
+      if (rs.goToNextRow()) {
+        const info = UserBasicInfo.fromResultSet(rs.getRow());
+        rs.close();
+        return info;
+      }
+      rs.close();
+      return null;
+    } catch (err) {
+      Logger.error(TAG, 'queryUserBasicInfo failed: %{public}s', JSON.stringify(err));
       return null;
     }
   }

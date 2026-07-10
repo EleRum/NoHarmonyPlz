@@ -8,9 +8,11 @@ import { AmapSearchService } from './map/AmapSearchService';
 import { PoiResult } from './map/MapTypes';
 import { Recommendation } from '../model/Recommendation';
 import { Dao } from '../database/Dao';
+import { UserBasicInfo } from '../model/UserBasicInfo';
 import { ActivitySegment } from '../model/ActivitySegment';
 import { Footprint } from '../model/Footprint';
 import { APP_TAG, ACTIVITY_LABELS } from '../common/Constants';
+import { getPreferenceSearchQueries, matchPreferenceTag } from '../common/TravelPreferenceTags';
 import { PlatformBridge } from '../platform/PlatformBridge';
 import { HttpResponse } from '../platform/network/INetworkProvider';
 import { WebRecommendationService, WebPlaceResult } from './WebRecommendationService';
@@ -28,6 +30,7 @@ interface UserPref {
   avgSpendHour: number;                   // 平均活跃时段
   preferredRadius: number;                // 活动半径(m)
   topPoiTypes: string[];                  // 最常去的POI类型
+  userPrefTags: string[];                 // 用户显式偏好标签（软引导用）
 }
 
 interface ScoredSegment {
@@ -228,17 +231,32 @@ export class RecommendationEngine {
     }
   }
 
-  /** AI 生成搜索关键词 — AI 自由决定类别和比例，无硬编码限制 */
+  /** AI 生成搜索关键词 — AI 自由决定类别和比例，无硬编码限制。用户偏好作为温和引导，不替代 AI 查询。 */
   private async getAiSearchQueries(hour: number, day: number, pref: UserPref, city: string): Promise<string[]> {
+    // 加载用户偏好标签，生成 1-2 个偏好相关查询（软引导，不替代 AI）
+    let userPrefQueries: string[] = [];
+    try {
+      const userInfo: UserBasicInfo | null = await Dao.getInstance().queryUserBasicInfo();
+      if (userInfo) {
+        const tags: string[] = userInfo.getPreferenceTags();
+        if (tags.length > 0) {
+          userPrefQueries = getPreferenceSearchQueries(tags, 2);
+          Logger.info(TAG, 'User pref queries: %{public}s', userPrefQueries.join(', '));
+        }
+      }
+    } catch (e) { /* ignore */ }
+
     try {
       const claude: ClaudeService = new ClaudeService();
       claude.loadApiKey();
       const timeLabel: string = hour < 10 ? '早上' : hour < 14 ? '中午' : hour < 17 ? '下午' : hour < 21 ? '晚上' : '深夜';
       const weekLabel: string = (day === 0 || day === 6) ? '周末' : '工作日';
       const topTypes: string = pref.topPoiTypes.slice(0, 3).join('、');
+      const prefHint: string = userPrefQueries.length > 0
+        ? `用户偏好：${userPrefQueries.join('、')}。可适当参考但不要局限于此。` : '';
       const prompt: string = `用户在${city || '当前城市'}，${weekLabel}${timeLabel}${hour}点。
 用户近期去过：${topTypes || '未知'}。
-
+${prefHint}
 生成 5 个高德地图POI搜索关键词，用逗号分隔。
 要求：必须覆盖至少 2 种不同类别（餐饮+休闲、或购物+运动+餐饮等），不能全是同一类。
 根据时间和情境合理分配：早上偏早餐咖啡，中午偏午餐，下午偏休闲购物，晚上偏晚餐娱乐，深夜偏宵夜。
@@ -253,14 +271,18 @@ export class RecommendationEngine {
           queries = reply.text.split(/\s+/).map((s: string) => s.trim()).filter((s: string) => s.length >= 2);
         }
         if (queries.length >= 3) {
-          Logger.info(TAG, 'AI queries (%{public}d): %{public}s', queries.length, queries.join(', '));
-          return queries.slice(0, 5);
+          // 在 AI 查询前添加 1-2 个用户偏好查询（软引导）
+          const allQueries: string[] = [...userPrefQueries, ...queries.slice(0, 5)];
+          Logger.info(TAG, 'AI queries (%{public}d + %{public}d pref): %{public}s',
+            queries.length, userPrefQueries.length, allQueries.join(', '));
+          return allQueries.slice(0, 7); // 最多 7 个查询
         }
       }
     } catch (e) {
       Logger.warn(TAG, 'AI query generation failed, using fallback');
     }
-    return FALLBACK_QUERIES;
+    // 后备：偏好查询 + 兜底查询
+    return [...userPrefQueries, ...FALLBACK_QUERIES];
   }
 
   // 非目的地 POI 黑名单（快递/设施/交通节点 等不应被推荐）
@@ -718,7 +740,8 @@ export class RecommendationEngine {
       sportsWeights: {},
       avgSpendHour: 12,
       preferredRadius: 3000,
-      topPoiTypes: []
+      topPoiTypes: [],
+      userPrefTags: []
     };
 
     try {
@@ -762,6 +785,14 @@ export class RecommendationEngine {
         pref.preferredRadius = Math.max(2000,
           (Math.max(...lats) - Math.min(...lats)) * 111000 * 0.5);
       }
+
+      // 同时加载用户显式偏好标签
+      try {
+        const userInfo: UserBasicInfo | null = await this.dao.queryUserBasicInfo();
+        if (userInfo) {
+          pref.userPrefTags = userInfo.getPreferenceTags();
+        }
+      } catch (e) { /* ignore */ }
 
       this.prefCache = pref;
     } catch (e) {
@@ -820,7 +851,7 @@ export class RecommendationEngine {
   }
 
   /**
-   * 给地点打分（基于用户偏好）
+   * 给地点打分（基于用户行为偏好 + 用户显式偏好标签）
    */
   private scorePlace(name: string, pref: UserPref, distance: number): number {
     let score: number = 0.3; // 基础分
@@ -834,6 +865,13 @@ export class RecommendationEngine {
         }
       }
     }
+
+    // 用户显式偏好标签温和加分（最多 +0.10）
+    if (pref.userPrefTags.length > 0) {
+      const prefBonus: number = matchPreferenceTag(name, pref.topPoiTypes[0] || '', pref.userPrefTags);
+      score += prefBonus;
+    }
+
     score = Math.min(1.0, score);
 
     // 距离扣分（超过偏好半径的扣分）

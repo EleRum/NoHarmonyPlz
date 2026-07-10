@@ -6,14 +6,19 @@
 import { Logger } from '../common/Logger';
 import router from '@ohos.router';
 import { webview } from '@kit.ArkWeb';
+import { common } from '@kit.AbilityKit';
 import { MapWebView } from '../services/map/MapWebView';
 import { geoLocationManager } from '@kit.LocationKit';
+import { checkServicesStatus, isAllServicesReady, ServiceStatus } from '../common/DeviceCheckUtils';
+import { GpsNetworkDialog } from '../common/GpsNetworkDialog';
+import { UserBasicInfo } from '../model/UserBasicInfo';
 import { Footprint } from '../model/Footprint';
 import { ActivitySegment } from '../model/ActivitySegment';
 import { Dao } from '../database/Dao';
 import { formatTimestamp, haversineDistance } from '../common/LocationUtils';
 import { ActivityClassifier } from '../services/ActivityClassifier';
 import { ACTIVITY_LABELS } from '../common/Constants';
+import { ProfileRefreshSignal } from '../common/TravelPreferenceTags';
 import { TimelineContent } from './TimelinePage';
 import { RecommendContent } from './RecommendPage';
 import { ReportContent } from './ReportPage';
@@ -130,12 +135,22 @@ export struct MapPage {
   @State navOriginLat: number = 0;
   @State navOriginLng: number = 0;
   @State navOriginName: string = '当前位置';
+  // ─── Settings 页面刷新信号 ───
+  @State settingsProfileRefreshKey: number = 0;
+  private lastKnownProfileRefreshCounter: number = 0;
   private navRoutePolylineId: string = '';
   private navStartMarkerId: string = '';
   private navEndMarkerId: string = '';
   private lastProcessedCalTs: number = 0;
   private calPoller: number | null = null;
   private aiAgent: AiAgent | null = null;
+  // ─── GPS/网络检测弹窗 ───
+  private dialogController: CustomDialogController | null = null;
+  private serviceDialogDismissed: boolean = false;
+  // ─── 用户信息（供 AI agent 上下文使用）───
+  private agentUserName: string = '';
+  private agentUserCity: string = '';
+  private agentUserPrefs: string = '';
 
   private getAiAgent(): AiAgent {
     if (!this.aiAgent) this.aiAgent = new AiAgent(this.dao);
@@ -274,6 +289,12 @@ export struct MapPage {
     Logger.info(TAG, 'MapPage aboutToAppear');
     this.loadAllData();
     this.requestLocation();
+    // 首次启动检测：无用户资料时进入欢迎引导流程
+    this.checkFirstLaunch();
+    // 检测 GPS 和网络状态，未开启时弹窗提醒
+    this.checkAndShowServiceDialog();
+    // 加载用户基础信息，供 AI agent 上下文使用
+    this.loadUserInfoForAgent();
     // 启动校准轮询：每2秒检查 WaypointDetailPage 是否发出了校准变更信号
     // 使用模块级变量，不依赖 AppStorage / onPageShow / @Watch（跨版本保证生效）
     this.calPoller = setInterval(() => {
@@ -283,6 +304,15 @@ export struct MapPage {
         Logger.info(TAG, 'Calibration poller detected change (ts=%{public}d), refreshing markers', result.newTs);
         this.refreshCalibrationsAndRedraw();
       }
+      // 弹窗显示期间，定时重检服务状态（用户可能去设置开启了服务后返回）
+      if (this.dialogController !== null && !this.serviceDialogDismissed) {
+        this.recheckServicesForDialog();
+      }
+      // 检测用户资料是否被修改，通知 SettingsPage 刷新
+      if (ProfileRefreshSignal.counter !== this.lastKnownProfileRefreshCounter) {
+        this.lastKnownProfileRefreshCounter = ProfileRefreshSignal.counter;
+        this.settingsProfileRefreshKey++;
+      }
     }, 2000);
   }
 
@@ -290,6 +320,10 @@ export struct MapPage {
     if (this.calPoller) {
       clearInterval(this.calPoller);
       this.calPoller = null;
+    }
+    if (this.dialogController) {
+      this.dialogController.close();
+      this.dialogController = null;
     }
   }
 
@@ -1033,7 +1067,10 @@ export struct MapPage {
       lastSegmentLng: last ? last.longitude : 0,
       todayDistance: route ? route.totalDistance : 0,
       todaySegCount: todaySegs.length,
-      footprintCount: this.footprintCount
+      footprintCount: this.footprintCount,
+      userName: this.agentUserName,
+      userCity: this.agentUserCity,
+      userPreferences: this.agentUserPrefs
     });
   }
 
@@ -1072,6 +1109,101 @@ export struct MapPage {
     Logger.info(TAG, 'Both map and GPS ready — starting recommendations at lat=%{public}.4f lng=%{public}.4f',
       this.mapCenter.latitude, this.mapCenter.longitude);
     AgentScheduler.getInstance().notifyMapReady(this.mapCenter.latitude, this.mapCenter.longitude);
+  }
+
+  // ─── GPS/网络检测弹窗 ───
+
+  /**
+   * 首次启动检测：无用户资料时跳转欢迎页
+   */
+  private async checkFirstLaunch(): Promise<void> {
+    try {
+      const info: UserBasicInfo | null = await this.dao.queryUserBasicInfo();
+      if (!info || info.username.trim().length === 0) {
+        Logger.info(TAG, 'First launch detected, navigating to WelcomePage');
+        router.replaceUrl({
+          url: 'pages/WelcomePage'
+        });
+      }
+    } catch (e) {
+      // DB 未就绪或其他错误，静默跳过
+    }
+  }
+
+  /**
+   * 加载用户基础信息，填入 AI agent 上下文（软引导，不强制）
+   */
+  private async loadUserInfoForAgent(): Promise<void> {
+    try {
+      const info: UserBasicInfo | null = await this.dao.queryUserBasicInfo();
+      if (info) {
+        this.agentUserName = info.username || '';
+        this.agentUserCity = info.city || '';
+        this.agentUserPrefs = info.getPreferenceDisplay();
+        Logger.info(TAG, 'User info loaded for agent: %{public}s %{public}s pref=%{public}s',
+          this.agentUserName, this.agentUserCity, this.agentUserPrefs);
+      }
+    } catch (e) {
+      // 静默失败，不影响主流程
+    }
+  }
+
+  /**
+   * 检测 GPS 和网络状态，任一项未开启则弹出提醒弹窗
+   */
+  private async checkAndShowServiceDialog(): Promise<void> {
+    try {
+      const status: ServiceStatus = await checkServicesStatus();
+      if (!isAllServicesReady(status)) {
+        this.showServiceAlertDialog(status);
+      }
+    } catch (e) {
+      Logger.warn(TAG, 'Service check failed: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /**
+   * 定时重检服务状态（弹窗显示期间，用户可能去设置开启服务后返回）
+   */
+  private async recheckServicesForDialog(): Promise<void> {
+    try {
+      const status: ServiceStatus = await checkServicesStatus();
+      if (isAllServicesReady(status)) {
+        // 服务已全部就绪，自动关闭弹窗
+        if (this.dialogController) {
+          this.dialogController.close();
+          this.dialogController = null;
+        }
+        Logger.info(TAG, 'All services ready, auto-dismissed dialog');
+      }
+    } catch (e) {
+      // 静默重试
+    }
+  }
+
+  /**
+   * 创建并显示服务提醒弹窗
+   */
+  private showServiceAlertDialog(status: ServiceStatus): void {
+    try {
+      const ctx: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+
+      this.dialogController = new CustomDialogController({
+        builder: GpsNetworkDialog({
+          locationEnabled: status.locationEnabled,
+          networkConnected: status.networkConnected,
+          context: ctx
+        }),
+        autoCancel: true,
+        alignment: DialogAlignment.Center,
+        customStyle: true
+      });
+
+      this.dialogController.open();
+      Logger.info(TAG, 'Service alert dialog opened');
+    } catch (e) {
+      Logger.error(TAG, 'Failed to show service dialog: %{public}s', JSON.stringify(e));
+    }
   }
 
   switchTab(index: number): void {
@@ -1765,7 +1897,7 @@ export struct MapPage {
           ReportContent({ onTabChange: (idx: number): void => { this.switchTab(idx); } })
         }
         if (this.currentTab === 4) {
-          SettingsContent({ onTabChange: (idx: number): void => { this.switchTab(idx); } })
+          SettingsContent({ onTabChange: (idx: number): void => { this.switchTab(idx); }, profileRefreshKey: this.settingsProfileRefreshKey })
         }
         if (this.currentTab === 5) {
           TourGuideContent()

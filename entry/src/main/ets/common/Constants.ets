@@ -12,6 +12,7 @@ export const TABLE_ACTIVITY_SEGMENT: string = 'activity_segment';
 export const TABLE_USER_PROFILE: string = 'user_profile';
 export const TABLE_RECOMMENDATION: string = 'recommendation';
 export const TABLE_SEGMENT_CALIBRATION: string = 'segment_calibration';
+export const TABLE_USER_BASIC_INFO: string = 'user_basic_info';
 
 // ========== 定位参数 ==========
 /** 最小定位间隔 (秒) */
