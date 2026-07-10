@@ -1696,7 +1696,7 @@ export struct MapPage {
                 .onClick(() => { this.showRecPicker = false; })
               Column() {
                 Row() {
-                  Text('附近门店').fontSize(16).fontWeight(FontWeight.Bold)
+                  Text('附近门店').fontSize(16).fontWeight(FontWeight.Bold).fontColor(getTheme(this.themeMode).textPrimary)
                   Blank()
                   Text('✕').fontSize(18).fontColor(getTheme(this.themeMode).textSecondary)
                     .onClick(() => { this.showRecPicker = false; })
@@ -1732,7 +1732,7 @@ export struct MapPage {
 
               Column() {
                 Row() {
-                  Text('🤖 足迹助手').fontSize(16).fontWeight(FontWeight.Bold)
+                  Text('🤖 足迹助手').fontSize(16).fontWeight(FontWeight.Bold).fontColor(getTheme(this.themeMode).textPrimary)
                   Blank()
                   Text('✕').fontSize(18).fontColor(getTheme(this.themeMode).textSecondary)
                     .onClick(() => { this.showChat = false; })
@@ -1806,7 +1806,7 @@ export struct MapPage {
               Column() {
                 // 标题栏
                 Row() {
-                  Text('🧭 导航').fontSize(16).fontWeight(FontWeight.Bold)
+                  Text('🧭 导航').fontSize(16).fontWeight(FontWeight.Bold).fontColor(getTheme(this.themeMode).textPrimary)
                   Blank()
                   Text('✕').fontSize(18).fontColor(getTheme(this.themeMode).textSecondary)
                     .onClick(() => { this.showNavigation = false; this.clearNavigationRoute(); })
@@ -1988,6 +1988,7 @@ export struct MapPage {
       .shadow({ radius: 8, color: getTheme(this.themeMode).shadow, offsetY: -2 })
     }
     .width('100%').height('100%')
+    .backgroundColor(getTheme(this.themeMode).pageBg)
   }
 
   @Builder

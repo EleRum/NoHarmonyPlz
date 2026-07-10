@@ -167,7 +167,7 @@ export struct TimelineContent {
                     .fontSize(13).fontColor(getTheme(this.themeMode).textSecondary)
                 }
                 .width('100%').padding({ left: 16, right: 16, top: 14, bottom: 8 })
-                .backgroundColor('#F5F7FA')
+                .backgroundColor(getTheme(this.themeMode).surfaceSecondary)
 
                 // 当天活动列表
                 if (dayGroup.segments.length > 0) {
@@ -179,7 +179,7 @@ export struct TimelineContent {
                           .fontSize(22)
                       }
                       .width(40).height(40).borderRadius(20)
-                      .backgroundColor('#F0F4FF').justifyContent(FlexAlign.Center)
+                      .backgroundColor(getTheme(this.themeMode).primaryLight).justifyContent(FlexAlign.Center)
                       .margin({ right: 12 })
 
                       // 活动信息
@@ -252,6 +252,6 @@ export struct TimelineContent {
       }
 
     }
-    .width('100%').height('100%').backgroundColor(getTheme(this.themeMode).surface)
+    .width('100%').height('100%').backgroundColor(getTheme(this.themeMode).pageBg)
   }
 }

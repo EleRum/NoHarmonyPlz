@@ -534,7 +534,7 @@ export struct TourGuideContent {
         if (this.plan && this.plan.dailyPlans.length > 0) {
           Column() {
             Text(this.plan.dailyPlans[this.selectedDayIndex].label + ' 行程')
-              .fontSize(13).fontWeight(FontWeight.Bold).margin({ bottom: 4 })
+              .fontSize(13).fontWeight(FontWeight.Bold).fontColor(getTheme(this.themeMode).textPrimary).margin({ bottom: 4 })
             Scroll() {
               Row() {
                 ForEach(this.plan.dailyPlans[this.selectedDayIndex].pois, (poi: import('../model/TourPlan').TourPoiItem, pidx: number) => {
@@ -558,7 +558,7 @@ export struct TourGuideContent {
         if (this.showPoiDetail) {
           Column() {
             Row() {
-              Text(this.poiDetailName).fontSize(16).fontWeight(FontWeight.Bold)
+              Text(this.poiDetailName).fontSize(16).fontWeight(FontWeight.Bold).fontColor(getTheme(this.themeMode).textPrimary)
                 .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
               Button('✕').fontSize(14).width(28).height(28)
                 .backgroundColor('#00000000').fontColor(getTheme(this.themeMode).textSecondary)
@@ -585,7 +585,7 @@ export struct TourGuideContent {
       // AI 聊天面板
       Column() {
         Row() {
-          Text('🤖 小途 · 旅游规划师').fontSize(13).fontWeight(FontWeight.Bold)
+          Text('🤖 小途 · 旅游规划师').fontSize(13).fontWeight(FontWeight.Bold).fontColor(getTheme(this.themeMode).textPrimary)
           Blank()
           Button('清空').fontSize(11).fontColor('#FFFFFF').height(24).padding({ left: 8, right: 8 })
             .backgroundColor('#FF5252').borderRadius(10)

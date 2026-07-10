@@ -31,6 +31,7 @@ export struct TravelJournalContent {
       }
     }
     .width('100%').height('100%')
+    .padding({ bottom: 56 })
     .backgroundColor(getTheme(this.themeMode).pageBg)
   }
 

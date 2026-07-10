@@ -247,7 +247,7 @@ struct WaypointDetailPage {
         Button() { Text('← 返回').fontSize(15).fontColor('#3B82F6') }
           .backgroundColor(Color.Transparent)
           .onClick(() => { router.back(); })
-        Text('路径点详情').fontSize(17).fontWeight(FontWeight.Medium)
+        Text('路径点详情').fontSize(17).fontWeight(FontWeight.Medium).fontColor(getTheme(this.themeMode).textPrimary)
           .layoutWeight(1).textAlign(TextAlign.Center)
         // 编辑按钮 — 始终显示，无 segmentStartTime 时用 timestamp 作为锚点
         Button() { Text(this.isCalibrated ? '✏️ 已校准' : '✏️ 编辑').fontSize(12).fontColor('#3B82F6') }
@@ -363,7 +363,7 @@ struct WaypointDetailPage {
 
           // ── 照片清单 ──
           if (this.data.photoList.length > 0) {
-            Text(`📸 全部照片 (${this.data.photoList.length})`)
+            Text(`📸 全部照片 (${this.data.photoList.length})`).fontColor(getTheme(this.themeMode).textPrimary)
               .fontSize(15).fontWeight(FontWeight.Medium)
               .width('100%').margin({ top: 20, bottom: 8 })
 
@@ -410,7 +410,7 @@ struct WaypointDetailPage {
 
           // 底部面板
           Column() {
-            Text('校准活动段').fontSize(16).fontWeight(FontWeight.Medium)
+            Text('校准活动段').fontSize(16).fontWeight(FontWeight.Medium).fontColor(getTheme(this.themeMode).textPrimary)
               .width('100%').textAlign(TextAlign.Center).padding({ top: 16, bottom: 12 })
 
             // ── 修改活动类型（两行）──
@@ -479,7 +479,7 @@ struct WaypointDetailPage {
           Column().width('100%').layoutWeight(1)
             .onClick(() => { this.showRenameInput = false; })
           Column() {
-            Text('修改地点名称').fontSize(16).fontWeight(FontWeight.Medium)
+            Text('修改地点名称').fontSize(16).fontWeight(FontWeight.Medium).fontColor(getTheme(this.themeMode).textPrimary)
               .width('100%').textAlign(TextAlign.Center).padding({ top: 16, bottom: 12 })
             TextInput({ placeholder: '输入新名称', text: this.editPoiName })
               .fontSize(14).height(44).width('100%')
@@ -516,7 +516,7 @@ struct WaypointDetailPage {
           Column().width('100%').layoutWeight(1)
             .onClick(() => { this.showDeleteConfirm = false; })
           Column() {
-            Text('⚠️ 确认删除').fontSize(16).fontWeight(FontWeight.Medium)
+            Text('⚠️ 确认删除').fontSize(16).fontWeight(FontWeight.Medium).fontColor(getTheme(this.themeMode).textPrimary)
               .width('100%').textAlign(TextAlign.Center).padding({ top: 20, bottom: 8 })
             Text('删除后该活动段将从时间线和地图中移除。\nAI 重新分类时也不会再出现。')
               .fontSize(13).fontColor(getTheme(this.themeMode).textSecondary).textAlign(TextAlign.Center)

@@ -146,7 +146,7 @@ export struct ReportContent {
             Column() {
               Row() {
                 Text('📊 今日报告')
-                  .fontSize(16).fontWeight(FontWeight.Bold)
+                  .fontSize(16).fontWeight(FontWeight.Bold).fontColor(getTheme(this.themeMode).textPrimary)
               }.width('100%').margin({ bottom: 10 })
 
               if (this.todayStats) {
@@ -183,7 +183,7 @@ export struct ReportContent {
             Column() {
               Row() {
                 Text('📈 本周概览')
-                  .fontSize(16).fontWeight(FontWeight.Bold)
+                  .fontSize(16).fontWeight(FontWeight.Bold).fontColor(getTheme(this.themeMode).textPrimary)
               }.width('100%').margin({ bottom: 10 })
 
               if (this.weekStats.length > 0) {
@@ -216,7 +216,7 @@ export struct ReportContent {
             // ── AI 摘要占位 ──
             Column() {
               Row() {
-                Text('🤖 AI 摘要').fontSize(16).fontWeight(FontWeight.Bold)
+                Text('🤖 AI 摘要').fontSize(16).fontWeight(FontWeight.Bold).fontColor(getTheme(this.themeMode).textPrimary)
               }.width('100%').margin({ bottom: 10 })
 
               Text(this.totalFootprints > 0
