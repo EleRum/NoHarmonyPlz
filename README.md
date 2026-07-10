@@ -8,21 +8,33 @@
 - GPS 实时定位追踪，记录每日活动轨迹
 - 自动识别活动类型：步行、骑行、驾车、停留等
 - 按天分组显示历史足迹和路线
+- GPS 和网络状态检测，未开启时弹窗提醒用户前往系统设置
 
-### 🤖 AI 旅行规划师·小途
-- 对话式旅行规划，自然语言描述需求
+### 👤 用户画像
+- 用户基础信息：昵称、年龄、居住城市、性别
+- 旅行偏好标签：美食探索、自然风光、历史文化等 10 类可选
+- 偏好仅作软引导，不影响推荐多样性
+- 首次启动自动进入欢迎引导流程，只需填写昵称即可开始
+
+### 🤖 AI 助手·小途 & 小足
+- **小途**：对话式旅行规划，自然语言描述需求
+- **小足**：自然语言活动修正，说"昨天第1个改成购物"即可
 - 酒店**可选**：本地人不需要酒店，游客可以中途换酒店
-- 逐点添加景点和美食：`"第一天上午去宽窄巷子"`
+- 用户画像融入对话上下文，但保持推荐多样性
 - 智能交通：步行 (<1km) / 驾车 (>1km) / 公交地铁 (用户指定)
 - 计划实时地图可视化：POI 标记 + 路线
 - 点击标记查看详情：名称、地址、评分、人均、电话
 - 快捷回复按钮：根据上下文自动切换
-- 按名称删除/修改行程、中途换酒店自动替换起点终点
 - **三层持久化**：翻页、退后台、杀进程都不丢计划
+
+### 🔔 智能提醒
+- GPS 未开启 → 弹窗引导前往位置设置
+- 网络未连接 → 弹窗引导前往无线网络设置
+- 服务恢复后自动关闭弹窗
 
 ### 📊 持久化
 - 内存 → 翻页保留
-- SQLite → 杀进程保留
+- SQLite → 杀进程保留（足迹、活动段、用户画像、AI 密钥）
 - 清空按钮 → 手动清除
 
 ## 技术架构
@@ -33,23 +45,43 @@ HarmonyOS (ArkTS) + WebView 地图
 entry/src/main/ets/
 ├── pages/
 │   ├── MapPage.ets              # 足迹地图主页
+│   ├── WelcomePage.ets          # 首次启动欢迎页
+│   ├── UserProfilePage.ets      # 个人资料编辑页
 │   ├── TourGuidePage.ets        # AI 旅行规划页
 │   ├── TimelinePage.ets         # 时间线
 │   ├── RecommendPage.ets        # 推荐
+│   ├── ReportPage.ets           # 行程报告
 │   ├── SettingsPage.ets         # 设置
 │   └── WaypointDetailPage.ets   # 地点详情
+├── common/
+│   ├── Logger.ets               # 日志工具
+│   ├── Constants.ets            # 常量/枚举
+│   ├── LocationUtils.ets        # 位置计算工具
+│   ├── CalibrationSignal.ets    # 跨页面信号
+│   ├── DeviceCheckUtils.ets     # GPS/网络检测工具
+│   ├── GpsNetworkDialog.ets     # 服务提醒弹窗
+│   └── TravelPreferenceTags.ets # 旅行偏好常量与信号
 ├── services/
-│   ├── TourGuideAgent.ets       # AI 规划 Agent
+│   ├── TourGuideAgent.ets       # AI 规划 Agent（小途）
+│   ├── AiAgent.ets              # AI 活动修正 Agent（小足）
 │   ├── ClaudeService.ets        # 多 AI 后端
+│   ├── RecommendationEngine.ets # 推荐引擎
+│   ├── AgentScheduler.ets       # 推荐调度器
 │   ├── LocationService.ets      # GPS 定位
 │   └── map/
 │       ├── AmapSearchService.ets # 高德 REST API
 │       ├── MapJsBridge.ets       # ArkTS↔JS 桥接
 │       └── MapWebView.ets        # WebView 地图组件
 ├── model/
-│   └── TourPlan.ets             # 旅行计划数据模型
+│   ├── Footprint.ets            # 足迹点
+│   ├── ActivitySegment.ets      # 活动段
+│   ├── UserProfile.ets          # 偏好键值存储
+│   ├── UserBasicInfo.ets        # 用户基础信息
+│   ├── TourPlan.ets             # 旅行计划
+│   └── Recommendation.ets       # 推荐
 └── database/
-    └── DatabaseHelper.ets        # SQLite
+    ├── DatabaseHelper.ets        # SQLite 建表
+    └── Dao.ets                   # 数据访问层
 ```
 
 ### 地图方案
@@ -81,11 +113,10 @@ hvigorw assembleHap -p product=default -p buildMode=debug
 ```
 
 ### 配置 AI
-```
-密钥 sk-your-api-key
-```
+在设置页面输入 API 密钥：
 - DeepSeek（便宜）：`sk-xxx`
 - Claude（更强）：`sk-ant-xxx`
+- 华为盘古：Bearer Token（去设置页手动选择）
 
 ## 路线规划
 
@@ -138,4 +169,4 @@ hvigorw assembleHap -p product=default -p buildMode=debug
 | 杀进程 | ✅ SQLite |
 | 清空按钮 | ❌ |
 
-v2.0.1
+v2.0.2
