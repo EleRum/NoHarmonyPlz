@@ -131,6 +131,9 @@ export class AiAgent {
       };
     }
 
+    // 每次对话前重新加载密钥（用户可能在设置页刚保存）
+    await this.claude.loadApiKey(true);
+
     // ── 尝试 AI 在线模式（传全部天数据）──
     if (this.allSegs.length > 0) {
       let ctxInfo: string = `${this.ctx.footprintCount}足迹点 ${this.allSegs.length}个活动段（跨${new Set(this.dayForAllSegs).size}天）`;
