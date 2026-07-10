@@ -633,10 +633,9 @@ export struct TourGuideContent {
             Row() {
               ForEach(this.quickReplies, (label: string) => {
                 Text(label)
-                  .fontSize(12).fontColor('#8B5CF6')
+                  .fontSize(12).fontColor(getTheme(this.themeMode).textPrimary)
                   .padding({ left: 10, right: 10, top: 6, bottom: 6 })
                   .backgroundColor(isDarkTheme() ? '#3A3A3C' : '#F0F2F5').borderRadius(14)
-                  .border({ width: 1, color: '#8B5CF640' })
                   .margin({ right: 6 })
                   .onClick(() => { this.onQuickReply(label); })
               })
