@@ -500,7 +500,7 @@ export class TourGuideAgent {
           ? `已调整为${this.plan.days}天行程，已有内容已保留！` +
             (hotelName ? `\n入住：${hotelName}` : '')
           : `已创建${this.plan.days}天${this.plan.city}行程！` +
-            (hotelName ? `\n入住：${hotelName}` : '\n起点：' + baseName) +
+            (hotelName ? `\n入住：${hotelName}` : '') +
             `\n\n告诉我你想去哪玩？比如"第一天去宽窄巷子"、"第二天吃火锅"～`;
         break;
       }
