@@ -248,7 +248,10 @@ export class RecommendationEngine {
 
     try {
       const claude: ClaudeService = new ClaudeService();
-      claude.loadApiKey();
+      await claude.loadApiKey();
+      if (!claude.hasKey) {
+        return [...userPrefQueries, ...FALLBACK_QUERIES];
+      }
       const timeLabel: string = hour < 10 ? '早上' : hour < 14 ? '中午' : hour < 17 ? '下午' : hour < 21 ? '晚上' : '深夜';
       const weekLabel: string = (day === 0 || day === 6) ? '周末' : '工作日';
       const topTypes: string = pref.topPoiTypes.slice(0, 3).join('、');
@@ -264,7 +267,7 @@ ${prefHint}
 只返回逗号分隔的关键词。`;
 
       const reply: ClaudeReply = await claude.chatSimple(prompt);
-      if (reply.text.length > 0) {
+      if (reply.text.length > 0 && !reply.text.includes('密钥')) {
         // 先按逗号分隔，如果只有1个再按空格分（AI 可能不按逗号返回）
         let queries: string[] = reply.text.split(/[,，、\n]/).map((s: string) => s.trim()).filter((s: string) => s.length >= 2);
         if (queries.length < 3) {
@@ -600,10 +603,9 @@ ${prefHint}
   private async enrichAiReasons(recs: Recommendation[]): Promise<void> {
     try {
       const claude: ClaudeService = new ClaudeService();
-      claude.loadApiKey();
-      if (recs.length === 0) return;
+      await claude.loadApiKey();
+      if (recs.length === 0 || !claude.hasKey) return;
 
-      // 构建地点列表
       let placeList: string = '';
       for (let i = 0; i < recs.length; i++) {
         placeList += `${i + 1}. ${recs[i].placeName}（${recs[i].placeType || '未知类型'}）\n`;
@@ -612,12 +614,12 @@ ${prefHint}
       const prompt: string = `附近地点：\n${placeList}\n为每个地点写一句推荐语（≤15字），要有画面感、让人想去。用换行分隔。\n示例：\n- 周末遛娃圣地，草坪超大\n- 深夜撸串喝啤酒超爽\n- 隐秘宝藏咖啡馆`;
 
       const reply: ClaudeReply = await claude.chatSimple(prompt);
-      if (reply.text.length > 0) {
+      // 跳过错误/无密钥回复
+      if (reply.text.length > 0 && !reply.text.includes('密钥') && !reply.text.includes('请先设置')) {
         const lines: string[] = reply.text.split('\n').filter((s: string) => s.trim().length >= 3);
         for (let i = 0; i < Math.min(lines.length, recs.length); i++) {
-          // 去掉序号前缀 "1. " 或 "1、"
           const clean: string = lines[i].replace(/^\d+[.、)\s]+/, '').trim();
-          if (clean.length > 0) {
+          if (clean.length > 0 && !clean.includes('密钥')) {
             recs[i].reason = clean;
           }
         }

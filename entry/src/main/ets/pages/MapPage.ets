@@ -18,12 +18,12 @@ import { Dao } from '../database/Dao';
 import { formatTimestamp, haversineDistance } from '../common/LocationUtils';
 import { ActivityClassifier } from '../services/ActivityClassifier';
 import { ACTIVITY_LABELS } from '../common/Constants';
-import { ProfileRefreshSignal } from '../common/TravelPreferenceTags';
+import { ProfileRefreshSignal, RecRefreshSignal, MapMarkerSignal } from '../common/TravelPreferenceTags';
 import { TimelineContent } from './TimelinePage';
-import { RecommendContent } from './RecommendPage';
-import { ReportContent } from './ReportPage';
-import { SettingsContent } from './SettingsPage';
+import { TravelJournalContent } from './TravelJournalPage';
 import { TourGuideContent } from './TourGuidePage';
+import { ProfileContent } from './ProfilePage';
+import { getTheme, isDarkTheme, FONT, RADIUS, SPACE } from '../common/Theme';
 import { AgentScheduler } from '../services/AgentScheduler';
 import { RecommendationEngine } from '../services/RecommendationEngine';
 import { AmapSearchService } from '../services/map/AmapSearchService';
@@ -86,6 +86,7 @@ interface ChatBubble {
 @Entry
 @Component
 export struct MapPage {
+  @StorageLink('theme_is_dark') themeMode: string = 'light';
   private mapService: IMapService | null = null;
   @State mapCenter: LatLng = DEFAULT_CENTER;
   @State mapZoom: number = 15;
@@ -138,6 +139,8 @@ export struct MapPage {
   // ─── Settings 页面刷新信号 ───
   @State settingsProfileRefreshKey: number = 0;
   private lastKnownProfileRefreshCounter: number = 0;
+  private lastKnownRecRefreshCounter: number = 0;
+  private lastKnownMapMarkerCounter: number = 0;
   private navRoutePolylineId: string = '';
   private navStartMarkerId: string = '';
   private navEndMarkerId: string = '';
@@ -217,7 +220,7 @@ export struct MapPage {
       try { ms.setMarkerVisible(m, false); } catch (e) {}
     }
     try {
-      const recs: Recommendation[] = await this.dao.queryRecentRecommendations(10);
+      const recs: Recommendation[] = await this.dao.queryRecentRecommendations(20);
       const posGroup: Record<string, Recommendation[]> = {};
       for (const r of recs) {
         if (!r.placeName || r.placeName.length === 0) continue;
@@ -312,6 +315,16 @@ export struct MapPage {
       if (ProfileRefreshSignal.counter !== this.lastKnownProfileRefreshCounter) {
         this.lastKnownProfileRefreshCounter = ProfileRefreshSignal.counter;
         this.settingsProfileRefreshKey++;
+      }
+      // 检测推荐是否被刷新，更新地图标记
+      if (RecRefreshSignal.counter !== this.lastKnownRecRefreshCounter) {
+        this.lastKnownRecRefreshCounter = RecRefreshSignal.counter;
+        this.refreshMapMarkers();
+      }
+      // 检测地图标记显隐开关变化
+      if (MapMarkerSignal.counter !== this.lastKnownMapMarkerCounter) {
+        this.lastKnownMapMarkerCounter = MapMarkerSignal.counter;
+        this.applyMapMarkerSetting();
       }
     }, 2000);
   }
@@ -1109,9 +1122,50 @@ export struct MapPage {
     Logger.info(TAG, 'Both map and GPS ready — starting recommendations at lat=%{public}.4f lng=%{public}.4f',
       this.mapCenter.latitude, this.mapCenter.longitude);
     AgentScheduler.getInstance().notifyMapReady(this.mapCenter.latitude, this.mapCenter.longitude);
+    // 首次推荐就绪后自动显示地图标记，延时等推荐引擎完成
+    setTimeout(() => {
+      if (!this.showRecMarkers) this.toggleRecMarkers();
+    }, 6000);
   }
 
   // ─── GPS/网络检测弹窗 ───
+
+  /** 根据设置显隐地图推荐标记 */
+  private async applyMapMarkerSetting(): Promise<void> {
+    try {
+      const p = await this.dao.queryUserProfile('map_markers_enabled');
+      const enabled: boolean = !(p && p.preferenceValue === 'false');
+      if (enabled && !this.showRecMarkers) {
+        // 开关打开但标记未显示 → 显示
+        this.toggleRecMarkers();
+      } else if (!enabled && this.showRecMarkers) {
+        // 开关关闭但标记仍显示 → 隐藏
+        if (this.mapService) {
+          for (const m of this.recMarkers) {
+            try { this.mapService.setMarkerVisible(m, false); } catch (e) {}
+          }
+        }
+        this.showRecMarkers = false;
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  /** 刷新地图推荐标记（清除旧标记并从 DB 重新加载） */
+  private refreshMapMarkers(): void {
+    Logger.info(TAG, 'Refreshing map rec markers');
+    // 清除旧标记
+    if (this.mapService) {
+      for (const m of this.recMarkers) {
+        try { this.mapService.removeMarker(m); } catch (e) {}
+      }
+    }
+    this.recMarkers = [];
+    this.recDataMap = {};
+    this.recGroupMap = {};
+    this.showRecMarkers = false;
+    // 延时等 DB 写入完成后重新加载
+    setTimeout(() => { this.toggleRecMarkers(); }, 300);
+  }
 
   /**
    * 首次启动检测：无用户资料时跳转欢迎页
@@ -1210,13 +1264,8 @@ export struct MapPage {
     if (index === this.currentTab) return;
     this.currentTab = index;
     if (index === 0) {
-      // 切换回地图 tab 时刷新校准，确保其它页面的校准修改立即反映到地图标记上
+      // 切换回地图 tab 时刷新校准
       this.refreshCalibrationsAndRedraw();
-    } else if (index === 1) {
-      this.triggerClassify();
-    } else if (index === 2) {
-      // 切换到推荐 tab 时触发一次立即刷新
-      this.triggerRecommendRefresh();
     }
   }
 
@@ -1570,17 +1619,19 @@ export struct MapPage {
           }
           .width('100%')
 
-          // 推荐浮钮（右侧）
+          // 推荐浮钮（右侧）→ 进入推荐全页
           Row() {
             Blank()
             Column() {
-              Text(this.showRecMarkers ? '📍' : '🔍').fontSize(20)
+              Text('💡').fontSize(20)
               Text('推荐').fontSize(9).fontColor('#FFFFFF').margin({ top: 1 })
             }
             .width(48).height(48).borderRadius(24)
             .backgroundColor('#CC3B82F6').justifyContent(FlexAlign.Center)
             .shadow({ radius: 6, color: '#403B82F6', offsetY: 2 })
-            .onClick(() => { this.toggleRecMarkers(); })
+            .onClick(() => {
+              router.pushUrl({ url: 'pages/RecommendPage' });
+            })
           }
           .width('100%').padding({ right: 12 }).margin({ top: 120 })
 
@@ -1611,6 +1662,22 @@ export struct MapPage {
             .onClick(() => { this.toggleNavigation(); })
           }
           .width('100%').padding({ right: 12 }).margin({ top: 232 })
+
+          // 刷新推荐浮钮（右下角）
+          Row() {
+            Blank()
+            Column() {
+              Text('🔄').fontSize(18)
+            }
+            .width(42).height(42).borderRadius(21)
+            .backgroundColor('#CC666666').justifyContent(FlexAlign.Center)
+            .shadow({ radius: 4, color: '#40666666', offsetY: 2 })
+            .onClick(() => {
+              AgentScheduler.getInstance().requestRefresh();
+              setTimeout(() => { this.refreshMapMarkers(); }, 800);
+            })
+          }
+          .width('100%').padding({ right: 12 }).margin({ top: 288 })
 
           // 推荐选择面板
           if (this.showRecPicker) {
@@ -1888,33 +1955,27 @@ export struct MapPage {
 
         // 其他 tab 覆盖层
         if (this.currentTab === 1) {
-          TimelineContent({ onTabChange: (idx: number): void => { this.switchTab(idx); }, segments: this.segments })
+          TravelJournalContent({ segments: this.segments })
         }
         if (this.currentTab === 2) {
-          RecommendContent({ onTabChange: (idx: number): void => { this.switchTab(idx); } })
+          TourGuideContent()
         }
         if (this.currentTab === 3) {
-          ReportContent({ onTabChange: (idx: number): void => { this.switchTab(idx); } })
-        }
-        if (this.currentTab === 4) {
-          SettingsContent({ onTabChange: (idx: number): void => { this.switchTab(idx); }, profileRefreshKey: this.settingsProfileRefreshKey })
-        }
-        if (this.currentTab === 5) {
-          TourGuideContent()
+          ProfileContent()
         }
       }
       .width('100%').layoutWeight(1)
 
       Row() {
-        this.BuildTab('🏃', '路线', 0)
-        this.BuildTab('📅', '时间线', 1)
-        this.BuildTab('💡', '推荐', 2)
-        this.BuildTab('📊', '报告', 3)
-        this.BuildTab('⚙️', '设置', 4)
-        this.BuildTab('🧭', '导游', 5)
+        this.BuildTab('🗺️', '地图', 0)
+        this.BuildTab('📋', '行程', 1)
+        this.BuildTab('🧭', '导游', 2)
+        this.BuildTab('👤', '我的', 3)
       }
-      .width('100%').height(54).backgroundColor('#FFFFFF')
-      .border({ width: { top: 0.5 }, color: '#E8E8E8' })
+      .width('100%').height(56)
+      .backgroundColor(getTheme().tabBarBg)
+      .borderRadius({ topLeft: RADIUS.xl, topRight: RADIUS.xl })
+      .shadow({ radius: 8, color: getTheme().shadow, offsetY: -2 })
     }
     .width('100%').height('100%')
   }
@@ -1922,14 +1983,20 @@ export struct MapPage {
   @Builder
   BuildTab(icon: string, label: string, idx: number) {
     Column() {
-      Text(icon).fontSize(22).opacity(this.currentTab === idx ? 1.0 : 0.35)
-      Text(label).fontSize(10)
-        .fontColor(this.currentTab === idx ? '#3B82F6' : '#AAA')
-        .margin({ top: 2 })
-        .fontWeight(this.currentTab === idx ? FontWeight.Medium : FontWeight.Normal)
-      Row() {}.width(20).height(2)
-        .backgroundColor(this.currentTab === idx ? '#3B82F6' : Color.Transparent)
-        .borderRadius(1).margin({ top: 4 })
+      if (this.currentTab === idx) {
+        Row() {
+          Text(icon).fontSize(16)
+          Text(label).fontSize(11).fontWeight(FontWeight.Medium).margin({ left: 4 })
+        }
+        .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+        .borderRadius(RADIUS.pill)
+        .backgroundColor(getTheme().primary)
+      } else {
+        Column() {
+          Text(icon).fontSize(18).opacity(0.5)
+          Text(label).fontSize(FONT.label).fontColor(getTheme().textTertiary)
+        }
+      }
     }
     .layoutWeight(1).height('100%')
     .justifyContent(FlexAlign.Center)

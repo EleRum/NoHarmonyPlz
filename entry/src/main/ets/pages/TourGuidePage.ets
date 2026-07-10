@@ -36,6 +36,7 @@ const g_planState: PlanState = new PlanState();
 
 @Component
 export struct TourGuideContent {
+  @StorageLink('theme_is_dark') themeMode: string = 'light';
   private mapService: MapJsBridge | null = null;
   private agent: TourGuideAgent = g_agent;
   @State mapCenter: LatLng = DEFAULT_CENTER;

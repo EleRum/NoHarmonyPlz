@@ -14,6 +14,7 @@ const TAG = 'UserProfilePage';
 @Entry
 @Component
 export struct UserProfilePage {
+  @StorageLink('theme_is_dark') themeMode: string = 'light';
   @State username: string = '';
   @State age: string = '';
   @State city: string = '';

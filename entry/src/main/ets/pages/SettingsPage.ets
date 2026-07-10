@@ -7,6 +7,7 @@ import router from '@ohos.router';
 import { ClaudeService } from '../services/ClaudeService';
 import { Dao } from '../database/Dao';
 import { UserBasicInfo } from '../model/UserBasicInfo';
+import { MapMarkerSignal } from '../common/TravelPreferenceTags';
 
 const TAG = 'SettingsPage';
 
@@ -41,6 +42,7 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
 
 @Component
 export struct SettingsContent {
+  @StorageLink('theme_is_dark') themeMode: string = 'light';
   onTabChange: (index: number) => void = () => {};
   @Prop @Watch('onProfileRefresh') profileRefreshKey: number = 0;
   @State apiKey: string = '';
@@ -55,6 +57,9 @@ export struct SettingsContent {
   @State customModel: string = '';
   // ─── 用户资料 ───
   @State profileName: string = '';
+  // ─── 推荐开关 ───
+  @State recEnabled: boolean = true;
+  @State showMapMarkers: boolean = true;
   @State profileSummary: string = '';
 
   private claude: ClaudeService = new ClaudeService();
@@ -64,6 +69,21 @@ export struct SettingsContent {
     Logger.info(TAG, 'SettingsPage aboutToAppear');
     this.loadKey();
     this.loadProfile();
+    this.loadRecSetting();
+  }
+
+  async loadRecSetting(): Promise<void> {
+    try {
+      const p1 = await this.dao.queryUserProfile('recommendation_enabled');
+      if (p1 && p1.preferenceValue === 'false') this.recEnabled = false;
+      const p2 = await this.dao.queryUserProfile('map_markers_enabled');
+      if (p2 && p2.preferenceValue === 'false') this.showMapMarkers = false;
+    } catch (e) { /* ignore */ }
+  }
+
+  async saveRecSetting(enabled: boolean): Promise<void> {
+    this.recEnabled = enabled;
+    await this.dao.upsertUserProfile('recommendation_enabled', enabled ? 'true' : 'false', 1);
   }
 
   async loadKey(): Promise<void> {
@@ -344,6 +364,49 @@ export struct SettingsContent {
               Text('  不会上传到任何第三方服务器（除对应 AI 服务商外）。').fontSize(11).fontColor('#AAA').margin({ left: 24, bottom: 4 }).maxLines(3)
             }
             .width('100%').alignItems(HorizontalAlign.Start).margin({ top: 12 })
+
+            this.CardSpacer()
+            this.CardSpacer()
+
+            // ─── 推荐设置 ───
+            this.CardTitle('🔔 推荐设置', '')
+            this.CardSpacer()
+
+            Row() {
+              Column() {
+                Text('后台自动刷新')
+                  .fontSize(14).fontColor('#1A1A1A')
+                Text('每5分钟自动更新推荐')
+                  .fontSize(11).fontColor('#AAA').margin({ top: 2 })
+              }
+              .alignItems(HorizontalAlign.Start).layoutWeight(1)
+              Toggle({ type: ToggleType.Switch, isOn: this.recEnabled })
+                .onChange((isOn: boolean) => { this.saveRecSetting(isOn); })
+            }
+            .width('100%').padding(16)
+            .backgroundColor('#FFFFFF').borderRadius(10)
+            .border({ width: 0.5, color: '#F0F0F0' })
+
+            this.CardSpacer()
+
+            Row() {
+              Column() {
+                Text('地图显示推荐标记')
+                  .fontSize(14).fontColor('#1A1A1A')
+                Text('在地图上显示推荐地点')
+                  .fontSize(11).fontColor('#AAA').margin({ top: 2 })
+              }
+              .alignItems(HorizontalAlign.Start).layoutWeight(1)
+              Toggle({ type: ToggleType.Switch, isOn: this.showMapMarkers })
+                .onChange((isOn: boolean) => {
+                  this.showMapMarkers = isOn;
+                  this.dao.upsertUserProfile('map_markers_enabled', isOn ? 'true' : 'false', 1);
+                  MapMarkerSignal.fire();
+                })
+            }
+            .width('100%').padding(16)
+            .backgroundColor('#FFFFFF').borderRadius(10)
+            .border({ width: 0.5, color: '#F0F0F0' })
 
             this.CardSpacer()
             this.CardSpacer()

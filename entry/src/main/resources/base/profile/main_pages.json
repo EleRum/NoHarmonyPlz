@@ -2,6 +2,7 @@
   "src": [
     "pages/MapPage",
     "pages/WelcomePage",
+    "pages/RecommendPage",
     "pages/WaypointDetailPage",
     "pages/UserProfilePage"
   ]

@@ -9,9 +9,26 @@
 export class ProfileRefreshSignal {
   static counter: number = 0;
 
-  /** 发出刷新信号（保存用户资料后调用） */
   static fire(): void {
     ProfileRefreshSignal.counter++;
+  }
+}
+
+/** 推荐刷新信号 — RecommendPage 刷新后通知 MapPage 更新标记 */
+export class RecRefreshSignal {
+  static counter: number = 0;
+
+  static fire(): void {
+    RecRefreshSignal.counter++;
+  }
+}
+
+/** 地图标记显隐信号 — SettingsPage 切换开关后通知 MapPage */
+export class MapMarkerSignal {
+  static counter: number = 0;
+
+  static fire(): void {
+    MapMarkerSignal.counter++;
   }
 }
 

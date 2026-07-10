@@ -4,12 +4,14 @@
  */
 import router from '@ohos.router';
 import { Logger } from '../common/Logger';
+import { getTheme, FONT, RADIUS, SPACE } from '../common/Theme';
 
 const TAG = 'WelcomePage';
 
 @Entry
 @Component
 export struct WelcomePage {
+  @StorageLink('theme_is_dark') themeMode: string = 'light';
 
   aboutToAppear(): void {
     Logger.info(TAG, 'WelcomePage aboutToAppear');
@@ -36,22 +38,21 @@ export struct WelcomePage {
           .fontSize(72)
 
         Text('足迹地图')
-          .fontSize(28)
+          .fontSize(FONT.hero)
           .fontWeight(FontWeight.Bold)
-          .fontColor('#1A1A1A')
-          .margin({ top: 16 })
+          .fontColor(getTheme().textPrimary)
+          .margin({ top: SPACE.lg })
 
         Text('记录每一天的足迹，发现生活轨迹')
-          .fontSize(15)
-          .fontColor('#888')
-          .margin({ top: 8 })
+          .fontSize(FONT.subheading)
+          .fontColor(getTheme().textSecondary)
+          .margin({ top: SPACE.sm })
 
-        // 分割线
         Divider()
           .width(40)
           .height(2)
-          .color('#3B82F6')
-          .margin({ top: 24, bottom: 24 })
+          .color(getTheme().primary)
+          .margin({ top: SPACE.xxl, bottom: SPACE.xxl })
 
         // 功能简介
         Column() {
@@ -62,7 +63,7 @@ export struct WelcomePage {
         }
         .width('100%')
         .alignItems(HorizontalAlign.Start)
-        .padding({ left: 20, right: 20 })
+        .padding({ left: SPACE.xl, right: SPACE.xl })
       }
       .width('100%')
       .alignItems(HorizontalAlign.Center)
@@ -72,24 +73,24 @@ export struct WelcomePage {
         Button('开始使用')
           .fontSize(17)
           .fontColor('#FFFFFF')
-          .backgroundColor('#3B82F6')
-          .borderRadius(24)
+          .backgroundColor(getTheme().primary)
+          .borderRadius(RADIUS.pill)
           .height(50)
           .width('80%')
-          .shadow({ radius: 8, color: '#403B82F6', offsetY: 4 })
+          .shadow({ radius: 8, color: getTheme().primary + '40', offsetY: 4 })
           .onClick(() => { this.goToProfile(); })
 
         Text('首次使用需填写基本信息')
-          .fontSize(11)
-          .fontColor('#CCC')
-          .margin({ top: 12, bottom: 32 })
+          .fontSize(FONT.label)
+          .fontColor(getTheme().textTertiary)
+          .margin({ top: SPACE.md, bottom: SPACE.xxxl })
       }
       .width('100%')
       .alignItems(HorizontalAlign.Center)
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#FFFFFF')
+    .backgroundColor(getTheme().surface)
   }
 
   @Builder
@@ -99,11 +100,11 @@ export struct WelcomePage {
         .fontSize(20)
         .width(32)
       Text(text)
-        .fontSize(14)
-        .fontColor('#555')
-        .margin({ left: 8 })
+        .fontSize(FONT.body)
+        .fontColor(getTheme().textPrimary)
+        .margin({ left: SPACE.sm })
     }
     .width('100%')
-    .margin({ top: 10, bottom: 10 })
+    .margin({ top: SPACE.sm, bottom: SPACE.sm })
   }
 }

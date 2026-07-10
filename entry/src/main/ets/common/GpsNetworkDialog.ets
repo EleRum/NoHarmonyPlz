@@ -4,11 +4,13 @@
  */
 import { common } from '@kit.AbilityKit';
 import { Logger } from './Logger';
+import { getTheme, FONT, RADIUS, SPACE } from './Theme';
 
 const TAG = 'GpsNetworkDialog';
 
 @CustomDialog
 export struct GpsNetworkDialog {
+  @StorageLink('theme_is_dark') themeMode: string = 'light';
   /** CustomDialog 控制器（由框架注入） */
   controller: CustomDialogController;
   /** GPS 定位是否开启 */
@@ -60,87 +62,83 @@ export struct GpsNetworkDialog {
       // ── 标题区 ──
       Row() {
         Text('⚠️')
-          .fontSize(24)
-          .margin({ right: 8 })
+          .fontSize(FONT.title)
+          .margin({ right: SPACE.sm })
         Text('服务检查')
-          .fontSize(18)
+          .fontSize(FONT.heading)
           .fontWeight(FontWeight.Bold)
-          .fontColor('#1A1A1A')
+          .fontColor(getTheme().textPrimary)
       }
       .width('100%')
-      .margin({ bottom: 20 })
+      .margin({ bottom: SPACE.xl })
 
       // ── 状态列表 ──
       Column() {
-        // GPS 状态行
         this.StatusRow(
           '📍',
           'GPS 定位',
           this.locationEnabled ? '已开启' : '未开启',
-          this.locationEnabled ? '#10B981' : '#EF4444'
+          this.locationEnabled ? getTheme().success : getTheme().danger
         )
 
         Divider()
           .strokeWidth(0.5)
-          .color('#F0F0F0')
-          .margin({ top: 12, bottom: 12 })
+          .color(getTheme().divider)
+          .margin({ top: SPACE.md, bottom: SPACE.md })
 
-        // 网络状态行
         this.StatusRow(
           '🌐',
           '网络连接',
           this.networkConnected ? '已连接' : '未连接',
-          this.networkConnected ? '#10B981' : '#EF4444'
+          this.networkConnected ? getTheme().success : getTheme().danger
         )
       }
       .width('100%')
-      .padding(16)
-      .backgroundColor('#F9FAFB')
-      .borderRadius(12)
-      .margin({ bottom: 16 })
+      .padding(SPACE.lg)
+      .backgroundColor(getTheme().surfaceSecondary)
+      .borderRadius(RADIUS.md)
+      .margin({ bottom: SPACE.lg })
 
       // ── 提示文字 ──
       Text(this.getSubtitle())
-        .fontSize(13)
-        .fontColor('#666666')
+        .fontSize(FONT.caption)
+        .fontColor(getTheme().textSecondary)
         .lineHeight(20)
         .width('100%')
-        .margin({ bottom: 20 })
+        .margin({ bottom: SPACE.xl })
 
       // ── 按钮区 ──
       Row() {
-        // 稍后再说
         Button('稍后再说')
-          .fontSize(14)
-          .fontColor('#999999')
+          .fontSize(FONT.body)
+          .fontColor(getTheme().textSecondary)
           .backgroundColor(Color.Transparent)
           .layoutWeight(1)
           .height(42)
-          .borderRadius(21)
-          .border({ width: 1, color: '#E0E0E0' })
+          .borderRadius(RADIUS.pill)
+          .border({ width: 1, color: getTheme().border })
           .onClick(() => {
             this.controller.close();
           })
 
-        Blank().width(12)
+        Blank().width(SPACE.md)
 
-        // 前往设置
         Button('前往设置')
-          .fontSize(14)
+          .fontSize(FONT.body)
           .fontColor('#FFFFFF')
-          .backgroundColor('#3B82F6')
+          .backgroundColor(getTheme().primary)
           .layoutWeight(1)
           .height(42)
-          .borderRadius(21)
+          .borderRadius(RADIUS.pill)
           .onClick(() => {
             this.openSystemSettings();
           })
       }
       .width('100%')
     }
-    .padding({ top: 24, left: 20, right: 20, bottom: 20 })
-    .borderRadius(16)
-    .backgroundColor('#FFFFFF')
+    .padding({ top: SPACE.xxl, left: SPACE.xl, right: SPACE.xl, bottom: SPACE.xl })
+    .borderRadius(RADIUS.lg)
+    .backgroundColor(getTheme().surface)
     .width('85%')
   }
 
@@ -151,24 +149,23 @@ export struct GpsNetworkDialog {
   StatusRow(icon: string, label: string, stateText: string, stateColor: string) {
     Row() {
       Text(icon)
-        .fontSize(20)
-        .margin({ right: 10 })
+        .fontSize(FONT.title)
+        .margin({ right: SPACE.sm })
 
       Text(label)
-        .fontSize(15)
-        .fontColor('#333333')
+        .fontSize(FONT.subheading)
+        .fontColor(getTheme().textPrimary)
         .fontWeight(FontWeight.Medium)
         .layoutWeight(1)
 
       Text(stateText)
-        .fontSize(14)
+        .fontSize(FONT.body)
         .fontColor(stateColor)
         .fontWeight(FontWeight.Medium)
 
-      // 状态指示圆点
       Circle({ width: 8, height: 8 })
         .fill(stateColor)
-        .margin({ left: 6 })
+        .margin({ left: SPACE.xs })
     }
     .width('100%')
     .height(36)

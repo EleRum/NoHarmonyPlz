@@ -80,6 +80,17 @@ export class AgentScheduler {
 
   isRunning(): boolean { return this.running; }
 
+  /** 检查推荐后台刷新是否启用（默认开启） */
+  async isEnabled(): Promise<boolean> {
+    try {
+      const profile = await this.dao.queryUserProfile('recommendation_enabled');
+      if (profile && profile.preferenceValue === 'false') {
+        return false;
+      }
+    } catch (e) { /* ignore */ }
+    return true;
+  }
+
   updateLocation(lat: number, lng: number): void {
     this.lastLat = lat;
     this.lastLng = lng;
@@ -112,6 +123,12 @@ export class AgentScheduler {
     if (this.lastLat === 0 && this.lastLng === 0) return;
     const now: number = Date.now();
     if (now - this.lastRefreshTime < MIN_REFRESH_INTERVAL_MS) return;
+    // 检查后台推荐开关
+    const enabled: boolean = await this.isEnabled();
+    if (!enabled) {
+      Logger.info(TAG, 'Recommendation disabled — skipping auto-refresh');
+      return;
+    }
     if (!this.hasSignificantMove()) {
       Logger.info(TAG, 'Location unchanged — skipping auto-refresh');
       return;
