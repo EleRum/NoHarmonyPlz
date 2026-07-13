@@ -4,6 +4,7 @@
     "pages/WelcomePage",
     "pages/RecommendPage",
     "pages/WaypointDetailPage",
-    "pages/UserProfilePage"
+    "pages/UserProfilePage",
+    "pages/SettingsDetailPage"
   ]
 }
