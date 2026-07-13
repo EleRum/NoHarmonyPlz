@@ -71,12 +71,42 @@ export struct UserProfilePage {
   async autoLocateCity(): Promise<void> {
     this.isLocating = true;
     try {
+      // ① 先试上次缓存的位置
+      let lat: number = 0;
+      let lng: number = 0;
       const last: geoLocationManager.Location | undefined = geoLocationManager.getLastLocation();
       if (last && last.latitude && last.longitude) {
+        lat = last.latitude;
+        lng = last.longitude;
+      }
+
+      // ② 缓存没有就尝试实时获取（模拟器需手动设置 GPS 位置）
+      if (lat === 0 || lng === 0) {
+        try {
+          const curLoc = await new Promise<geoLocationManager.Location | null>((resolve) => {
+            const timer = setTimeout(() => resolve(null), 5000);
+            geoLocationManager.getCurrentLocation({
+              priority: geoLocationManager.LocationRequestPriority.FIRST_FIX,
+              scenario: geoLocationManager.LocationRequestScenario.UNSET,
+              timeoutMs: 5000, maxAccuracy: 0
+            }, (err, loc) => {
+              clearTimeout(timer);
+              resolve(err ? null : (loc ?? null));
+            });
+          });
+          if (curLoc && curLoc.latitude && curLoc.longitude) {
+            lat = curLoc.latitude;
+            lng = curLoc.longitude;
+          }
+        } catch (e) {
+          // 模拟器上 getCurrentLocation 也会失败，继续走兜底
+        }
+      }
+
+      // ③ 拿到了坐标就反查城市名
+      if (lat !== 0 || lng !== 0) {
         const request: geoLocationManager.ReverseGeoCodeRequest = {
-          latitude: last.latitude,
-          longitude: last.longitude,
-          maxItems: 1
+          latitude: lat, longitude: lng, maxItems: 1
         };
         const addresses = await geoLocationManager.getAddressesFromLocation(request);
         if (addresses && addresses.length > 0) {
@@ -84,11 +114,15 @@ export struct UserProfilePage {
           this.city = addr.locality ?? addr.administrativeArea ?? '';
           if (this.city.length > 0) {
             this.showToast('已自动获取城市');
+            this.isLocating = false;
+            return;
           }
         }
       }
+
+      // ④ 全都没拿到 — 用高德 REST API 兜底
       if (!this.city) {
-        this.showToast('无法获取城市，请手动输入');
+        this.showToast('模拟器中请手动输入城市，或先在模拟器 Extended Controls 中设置 GPS 位置');
       }
     } catch (e) {
       Logger.error(TAG, 'Auto locate failed: %{public}s', JSON.stringify(e));
