@@ -233,7 +233,7 @@ export struct SettingsContent {
             // ════════════════════════════════════════════
             //  卡片 ①  AI 设置
             // ════════════════════════════════════════════
-            this.SectionCard(() => {
+            Column() {
               this.SectionHeader('🤖', 'AI 设置', '支持 Claude / DeepSeek / 华为盘古')
 
               if (this.hasKey) {
@@ -279,9 +279,8 @@ export struct SettingsContent {
                 .onChange((value: string) => { this.apiKey = value; })
 
               // 自定义端点
-              this.CardSpacer()
               Text('⚡ 自定义端点（可选，留空使用默认）')
-                .fontSize(12).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 4 }).width('100%')
+                .fontSize(12).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 10, bottom: 4 }).width('100%')
               TextInput({ placeholder: this.getDefault().defaultEndpoint, text: this.customEndpoint })
                 .fontSize(13).fontColor(getTheme(this.themeMode).textPrimary).width('100%').height(40).placeholderColor(getTheme(this.themeMode).textTertiary)
                 .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
@@ -309,7 +308,7 @@ export struct SettingsContent {
                     .fontSize(12).fontColor('#EF4444').backgroundColor('#FEF2F2')
                     .borderRadius(6).height(32)
                     .onClick(() => { this.clearKey(); })
-                  }
+                }
                 Button(this.isSaving ? '保存中…' : '保存')
                   .fontSize(12).fontColor('#FFFFFF')
                   .backgroundColor(this.isSaving ? '#93C5FD' : '#3B82F6')
@@ -321,23 +320,23 @@ export struct SettingsContent {
               .width('100%').margin({ top: 10 })
 
               // 获取密钥说明
-              Column() {
-                Text('🔑 获取密钥')
-                  .fontSize(13).fontWeight(FontWeight.Medium).fontColor(getTheme(this.themeMode).textPrimary)
-                  .margin({ top: 12, bottom: 6 }).width('100%')
-                Text('Claude: console.anthropic.com → API Keys').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 2 }).width('100%')
-                Text('DeepSeek: platform.deepseek.com → API Keys').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 2 }).width('100%')
-                Text('华为盘古: console.huaweicloud.com/modelarts → 应用接入 → API Key').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 6 }).width('100%')
-                Text('💡 密钥仅保存在本地数据库，不会上传到任何第三方服务器。')
-                  .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).maxLines(3).width('100%')
-              }
-              .width('100%').alignItems(HorizontalAlign.Start)
-            })
+              Text('🔑 获取密钥')
+                .fontSize(13).fontWeight(FontWeight.Medium).fontColor(getTheme(this.themeMode).textPrimary)
+                .margin({ top: 12, bottom: 6 }).width('100%')
+              Text('Claude: console.anthropic.com → API Keys').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 2 }).width('100%')
+              Text('DeepSeek: platform.deepseek.com → API Keys').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 2 }).width('100%')
+              Text('华为盘古: console.huaweicloud.com/modelarts → 应用接入 → API Key').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 6 }).width('100%')
+              Text('💡 密钥仅保存在本地数据库，不会上传到任何第三方服务器。')
+                .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).maxLines(3).width('100%')
+            }
+            .width('100%').padding(16).backgroundColor(getTheme(this.themeMode).surface).borderRadius(12)
+            .shadow({ radius: 2, color: '#08000000', offsetY: 1 })
+            .margin({ top: 12 })
 
             // ════════════════════════════════════════════
             //  卡片 ②  推荐设置
             // ════════════════════════════════════════════
-            this.SectionCard(() => {
+            Column() {
               this.SectionHeader('🔔', '推荐设置', '')
 
               Row() {
@@ -364,23 +363,28 @@ export struct SettingsContent {
                 Toggle({ type: ToggleType.Switch, isOn: this.showMapMarkers })
                   .onChange((isOn: boolean) => {
                     this.showMapMarkers = isOn;
-                    this.dao.upsertUserProfile('map_markers_enabled', isOn ? 'true' : 'false', 1);
+                this.dao.upsertUserProfile('map_markers_enabled', isOn ? 'true' : 'false', 1);
                     MapMarkerSignal.fire();
                   })
               }
               .width('100%')
-            })
+            }
+            .width('100%').padding(16).backgroundColor(getTheme(this.themeMode).surface).borderRadius(12)
+            .shadow({ radius: 2, color: '#08000000', offsetY: 1 })
+            .margin({ top: 12 })
 
             // ════════════════════════════════════════════
             //  卡片 ③  关于
             // ════════════════════════════════════════════
-            this.SectionCard(() => {
+            Column() {
               this.SectionHeader('📱', '关于', '足迹地图 v2.0.3')
-              Column() {}.height(4)
               this.InfoRow('📍', '记录每一天的足迹，发现生活轨迹')
               this.InfoRow('🗺️', '基于高德地图 JSAPI v2.0')
               this.InfoRow('🧠', 'AI 助手"小足"陪你聊天、推荐周边')
-            })
+            }
+            .width('100%').padding(16).backgroundColor(getTheme(this.themeMode).surface).borderRadius(12)
+            .shadow({ radius: 2, color: '#08000000', offsetY: 1 })
+            .margin({ top: 12 })
           }
           .width('100%').padding({ left: 16, right: 16, bottom: 20 }).alignItems(HorizontalAlign.Center)
         }
@@ -400,16 +404,6 @@ export struct SettingsContent {
   }
 
   @Builder
-  SectionCard(content: () => void) {
-    Column() {
-      content()
-    }
-    .width('100%').padding(16).backgroundColor(getTheme(this.themeMode).surface).borderRadius(12)
-    .shadow({ radius: 2, color: '#08000000', offsetY: 1 })
-    .margin({ top: 12 })
-  }
-
-  @Builder
   SectionHeader(icon: string, title: string, subtitle: string) {
     Row() {
       Text(icon).fontSize(18).margin({ right: 8 })
@@ -421,20 +415,6 @@ export struct SettingsContent {
       }
     }
     .width('100%').margin({ bottom: 10 })
-  }
-
-  @Builder
-  CardTitle(title: string, subtitle: string) {
-    Column() {
-      Text(title).fontSize(15).fontWeight(FontWeight.Medium).fontColor(getTheme(this.themeMode).textPrimary)
-      Text(subtitle).fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 2 })
-    }
-    .alignItems(HorizontalAlign.Start).width('100%')
-  }
-
-  @Builder
-  CardSpacer() {
-    Row().width('100%').height(12)
   }
 
   @Builder
