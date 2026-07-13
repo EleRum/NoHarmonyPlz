@@ -230,168 +230,159 @@ export struct SettingsContent {
 
         Scroll() {
           Column() {
-            // ─── AI 密钥 ───
-            this.CardTitle('🤖 AI 密钥', '支持 Claude / DeepSeek / 华为盘古')
-            this.CardSpacer()
+            // ════════════════════════════════════════════
+            //  卡片 ①  AI 设置
+            // ════════════════════════════════════════════
+            this.SectionCard(() => {
+              this.SectionHeader('🤖', 'AI 设置', '支持 Claude / DeepSeek / 华为盘古')
 
-            if (this.hasKey) {
+              if (this.hasKey) {
+                Row() {
+                  Text('当前服务:').fontSize(13).fontColor(getTheme(this.themeMode).textSecondary)
+                  Text(this.providerName)
+                    .fontSize(13).fontColor('#3B82F6').fontWeight(FontWeight.Medium)
+                    .margin({ left: 6 })
+                }
+                .width('100%').margin({ bottom: 12 })
+              }
+
+              // 服务商选择
+              Text('选择服务商').fontSize(13).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 8 }).width('100%')
               Row() {
-                Text('当前服务:').fontSize(14).fontColor(getTheme(this.themeMode).textSecondary)
-                Text(this.providerName)
-                  .fontSize(14).fontColor('#3B82F6').fontWeight(FontWeight.Medium)
-                  .margin({ left: 6 })
+                ForEach(PROVIDER_OPTIONS, (opt: ProviderOption, index: number) => {
+                  Column() {
+                    Text(opt.label)
+                      .fontSize(13)
+                      .fontColor(this.selectedProvider === opt.key ? '#FFFFFF' : getTheme(this.themeMode).textPrimary)
+                      .fontWeight(this.selectedProvider === opt.key ? FontWeight.Medium : FontWeight.Normal)
+                    Text(opt.desc)
+                      .fontSize(10)
+                      .fontColor(this.selectedProvider === opt.key ? '#FFFFFFCC' : getTheme(this.themeMode).textSecondary)
+                      .margin({ top: 2 })
+                  }
+                  .width('31%').height(52).borderRadius(8)
+                  .backgroundColor(this.selectedProvider === opt.key ? '#3B82F6' : getTheme(this.themeMode).surfaceSecondary)
+                  .border({ width: 1, color: this.selectedProvider === opt.key ? '#3B82F6' : getTheme(this.themeMode).border })
+                  .justifyContent(FlexAlign.Center)
+                  .onClick(() => { this.onChangeProvider(opt.key); })
+                  .margin({ right: 8 })
+                })
+              }
+              .width('100%').margin({ bottom: 10 })
+
+              // 密钥输入
+              TextInput({ placeholder: '输入密钥 ' + this.getDefault().prefixHint, text: this.apiKey })
+                .type(this.showKey ? InputType.Normal : InputType.Password)
+                .fontSize(14).fontColor(getTheme(this.themeMode).textPrimary).width('100%').height(44).placeholderColor(getTheme(this.themeMode).textTertiary)
+                .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
+                .padding({ left: 12, right: 36 })
+                .onChange((value: string) => { this.apiKey = value; })
+
+              // 自定义端点
+              this.CardSpacer()
+              Text('⚡ 自定义端点（可选，留空使用默认）')
+                .fontSize(12).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 4 }).width('100%')
+              TextInput({ placeholder: this.getDefault().defaultEndpoint, text: this.customEndpoint })
+                .fontSize(13).fontColor(getTheme(this.themeMode).textPrimary).width('100%').height(40).placeholderColor(getTheme(this.themeMode).textTertiary)
+                .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
+                .padding({ left: 12, right: 12 })
+                .onChange((value: string) => { this.customEndpoint = value; })
+
+              Text('模型名（可选，留空使用默认）')
+                .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 6, bottom: 4 }).width('100%')
+              TextInput({ placeholder: this.getDefault().defaultModel, text: this.customModel })
+                .fontSize(13).fontColor(getTheme(this.themeMode).textPrimary).placeholderColor(getTheme(this.themeMode).textTertiary).width('100%').height(40)
+                .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
+                .padding({ left: 12, right: 12 })
+                .onChange((value: string) => { this.customModel = value; })
+
+              // 操作按钮
+              Row() {
+                Row() {
+                  Text(this.showKey ? '🙈' : '👁️').fontSize(14)
+                  Text(this.showKey ? '隐藏' : '显示').fontSize(12).fontColor(getTheme(this.themeMode).textSecondary).margin({ left: 4 })
+                }
+                .onClick(() => { this.showKey = !this.showKey; })
+                Blank()
+                if (this.hasKey) {
+                  Button('清除密钥')
+                    .fontSize(12).fontColor('#EF4444').backgroundColor('#FEF2F2')
+                    .borderRadius(6).height(32)
+                    .onClick(() => { this.clearKey(); })
+                  }
+                Button(this.isSaving ? '保存中…' : '保存')
+                  .fontSize(12).fontColor('#FFFFFF')
+                  .backgroundColor(this.isSaving ? '#93C5FD' : '#3B82F6')
+                  .borderRadius(6).height(32)
+                  .enabled(!this.isSaving)
+                  .onClick(() => { this.saveKey(); })
+                  .margin({ left: 8 })
+              }
+              .width('100%').margin({ top: 10 })
+
+              // 获取密钥说明
+              Column() {
+                Text('🔑 获取密钥')
+                  .fontSize(13).fontWeight(FontWeight.Medium).fontColor(getTheme(this.themeMode).textPrimary)
+                  .margin({ top: 12, bottom: 6 }).width('100%')
+                Text('Claude: console.anthropic.com → API Keys').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 2 }).width('100%')
+                Text('DeepSeek: platform.deepseek.com → API Keys').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 2 }).width('100%')
+                Text('华为盘古: console.huaweicloud.com/modelarts → 应用接入 → API Key').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 6 }).width('100%')
+                Text('💡 密钥仅保存在本地数据库，不会上传到任何第三方服务器。')
+                  .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).maxLines(3).width('100%')
+              }
+              .width('100%').alignItems(HorizontalAlign.Start)
+            })
+
+            // ════════════════════════════════════════════
+            //  卡片 ②  推荐设置
+            // ════════════════════════════════════════════
+            this.SectionCard(() => {
+              this.SectionHeader('🔔', '推荐设置', '')
+
+              Row() {
+                Column() {
+                  Text('后台自动刷新')
+                    .fontSize(14).fontColor(getTheme(this.themeMode).textPrimary)
+                  Text('每5分钟自动更新推荐')
+                    .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 2 })
+                }
+                .alignItems(HorizontalAlign.Start).layoutWeight(1)
+                Toggle({ type: ToggleType.Switch, isOn: this.recEnabled })
+                  .onChange((isOn: boolean) => { this.saveRecSetting(isOn); })
               }
               .width('100%').margin({ bottom: 12 })
-            }
 
-            // ─── 服务商选择 ───
-            Text('选择服务商').fontSize(13).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 8 }).width('100%')
-            Row() {
-              ForEach(PROVIDER_OPTIONS, (opt: ProviderOption, index: number) => {
-                Column() {
-                  Text(opt.label)
-                    .fontSize(13)
-                    .fontColor(this.selectedProvider === opt.key ? '#FFFFFF' : '#666')
-                    .fontWeight(this.selectedProvider === opt.key ? FontWeight.Medium : FontWeight.Normal)
-                  Text(opt.desc)
-                    .fontSize(10)
-                    .fontColor(this.selectedProvider === opt.key ? '#FFFFFFCC' : '#AAA')
-                    .margin({ top: 2 })
-                }
-                .width('31%').height(52).borderRadius(8)
-                .backgroundColor(this.selectedProvider === opt.key ? '#3B82F6' : getTheme(this.themeMode).surfaceSecondary)
-                .border({ width: 1, color: this.selectedProvider === opt.key ? '#3B82F6' : getTheme(this.themeMode).border })
-                .justifyContent(FlexAlign.Center)
-                .onClick(() => { this.onChangeProvider(opt.key); })
-                .margin({ right: 8 })
-              })
-            }
-            .width('100%').margin({ bottom: 10 })
-
-            // ─── 密钥输入 ───
-            TextInput({ placeholder: '输入密钥 ' + this.getDefault().prefixHint, text: this.apiKey })
-              .type(this.showKey ? InputType.Normal : InputType.Password)
-              .fontSize(14).fontColor(getTheme(this.themeMode).textPrimary).width('100%').height(44).placeholderColor(getTheme(this.themeMode).textTertiary)
-              .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
-              .padding({ left: 12, right: 36 })
-              .onChange((value: string) => { this.apiKey = value; })
-
-            // ─── 自定义端点（所有 provider 通用）───
-            this.CardSpacer()
-            Text('⚡ 自定义端点（可选，留空使用默认）')
-              .fontSize(13).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 6 }).width('100%')
-
-            TextInput({ placeholder: this.getDefault().defaultEndpoint, text: this.customEndpoint })
-              .fontSize(13).fontColor(getTheme(this.themeMode).textPrimary).width('100%').height(40).placeholderColor(getTheme(this.themeMode).textTertiary)
-              .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
-              .padding({ left: 12, right: 12 })
-              .onChange((value: string) => { this.customEndpoint = value; })
-
-            Text('模型名（可选，留空使用默认）')
-              .fontSize(12).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 6, bottom: 4 }).width('100%')
-
-            TextInput({ placeholder: this.getDefault().defaultModel, text: this.customModel })
-              .fontSize(13).fontColor(getTheme(this.themeMode).textPrimary).placeholderColor(getTheme(this.themeMode).textTertiary).width('100%').height(40)
-              .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(8)
-              .padding({ left: 12, right: 12 })
-              .onChange((value: string) => { this.customModel = value; })
-
-            // ─── 操作按钮 ───
-            Row() {
               Row() {
-                Text(this.showKey ? '🙈' : '👁️').fontSize(14)
-                Text(this.showKey ? '隐藏' : '显示').fontSize(12).fontColor(getTheme(this.themeMode).textSecondary).margin({ left: 4 })
+                Column() {
+                  Text('地图显示推荐标记')
+                    .fontSize(14).fontColor(getTheme(this.themeMode).textPrimary)
+                  Text('在地图上显示推荐地点')
+                    .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 2 })
+                }
+                .alignItems(HorizontalAlign.Start).layoutWeight(1)
+                Toggle({ type: ToggleType.Switch, isOn: this.showMapMarkers })
+                  .onChange((isOn: boolean) => {
+                    this.showMapMarkers = isOn;
+                    this.dao.upsertUserProfile('map_markers_enabled', isOn ? 'true' : 'false', 1);
+                    MapMarkerSignal.fire();
+                  })
               }
-              .onClick(() => { this.showKey = !this.showKey; })
-              Blank()
-              if (this.hasKey) {
-                Button('清除密钥')
-                  .fontSize(12).fontColor('#EF4444').backgroundColor('#FEF2F2')
-                  .borderRadius(6).height(32)
-                  .onClick(() => { this.clearKey(); })
-              }
-              Button(this.isSaving ? '保存中…' : '保存')
-                .fontSize(12).fontColor('#FFFFFF')
-                .backgroundColor(this.isSaving ? '#93C5FD' : '#3B82F6')
-                .borderRadius(6).height(32)
-                .enabled(!this.isSaving)
-                .onClick(() => { this.saveKey(); })
-                .margin({ left: 8 })
-            }
-            .width('100%').margin({ top: 10 })
+              .width('100%')
+            })
 
-            this.CardSpacer()
-
-            // 说明
-            Column() {
-              this.InfoRow('🔑', '获取密钥')
-              Text('  Claude: console.anthropic.com → API Keys').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ left: 24, bottom: 4 })
-              Text('  DeepSeek: platform.deepseek.com → API Keys').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ left: 24, bottom: 4 })
-              Text('  华为盘古: console.huaweicloud.com/modelarts → 应用接入 → API Key').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ left: 24, bottom: 10 })
-              this.InfoRow('💡', '密钥仅保存在本地数据库')
-              Text('  不会上传到任何第三方服务器（除对应 AI 服务商外）。').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ left: 24, bottom: 4 }).maxLines(3)
-            }
-            .width('100%').alignItems(HorizontalAlign.Start).margin({ top: 12 })
-
-            this.CardSpacer()
-            this.CardSpacer()
-            Divider().color(getTheme(this.themeMode).divider).height(0.5)
-              .margin({ left: 16, right: 16, top: 8, bottom: 8 })
-
-            // ─── 推荐设置 ───
-            this.CardTitle('🔔 推荐', '')
-            this.CardSpacer()
-
-            Row() {
-              Column() {
-                Text('后台自动刷新')
-                  .fontSize(14).fontColor(getTheme(this.themeMode).textPrimary)
-                Text('每5分钟自动更新推荐')
-                  .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 2 })
-              }
-              .alignItems(HorizontalAlign.Start).layoutWeight(1)
-              Toggle({ type: ToggleType.Switch, isOn: this.recEnabled })
-                .onChange((isOn: boolean) => { this.saveRecSetting(isOn); })
-            }
-            .width('100%').padding(16)
-            .backgroundColor(getTheme(this.themeMode).surface).borderRadius(10)
-            .border({ width: 0.5, color: '#F0F0F0' })
-
-            this.CardSpacer()
-
-            Row() {
-              Column() {
-                Text('地图显示推荐标记')
-                  .fontSize(14).fontColor(getTheme(this.themeMode).textPrimary)
-                Text('在地图上显示推荐地点')
-                  .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 2 })
-              }
-              .alignItems(HorizontalAlign.Start).layoutWeight(1)
-              Toggle({ type: ToggleType.Switch, isOn: this.showMapMarkers })
-                .onChange((isOn: boolean) => {
-                  this.showMapMarkers = isOn;
-                  this.dao.upsertUserProfile('map_markers_enabled', isOn ? 'true' : 'false', 1);
-                  MapMarkerSignal.fire();
-                })
-            }
-            .width('100%').padding(16)
-            .backgroundColor(getTheme(this.themeMode).surface).borderRadius(10)
-            .border({ width: 0.5, color: '#F0F0F0' })
-
-            this.CardSpacer()
-            this.CardSpacer()
-            Divider().color(getTheme(this.themeMode).divider).height(0.5)
-              .margin({ left: 16, right: 16, top: 8, bottom: 8 })
-            this.CardTitle('📱 关于', '足迹地图 v2.0.1')
-            this.CardSpacer()
-            Column() {
+            // ════════════════════════════════════════════
+            //  卡片 ③  关于
+            // ════════════════════════════════════════════
+            this.SectionCard(() => {
+              this.SectionHeader('📱', '关于', '足迹地图 v2.0.3')
+              Column() {}.height(4)
               this.InfoRow('📍', '记录每一天的足迹，发现生活轨迹')
               this.InfoRow('🗺️', '基于高德地图 JSAPI v2.0')
               this.InfoRow('🧠', 'AI 助手"小足"陪你聊天、推荐周边')
-            }
-            .width('100%').alignItems(HorizontalAlign.Start).margin({ top: 4 })
+            })
           }
-          .width('100%').padding({ left: 16, right: 16, bottom: 20 })
+          .width('100%').padding({ left: 16, right: 16, bottom: 20 }).alignItems(HorizontalAlign.Center)
         }
         .layoutWeight(1).scrollBar(BarState.Off)
       }
@@ -406,6 +397,30 @@ export struct SettingsContent {
       }
     }
     .width('100%').height('100%')
+  }
+
+  @Builder
+  SectionCard(content: () => void) {
+    Column() {
+      content()
+    }
+    .width('100%').padding(16).backgroundColor(getTheme(this.themeMode).surface).borderRadius(12)
+    .shadow({ radius: 2, color: '#08000000', offsetY: 1 })
+    .margin({ top: 12 })
+  }
+
+  @Builder
+  SectionHeader(icon: string, title: string, subtitle: string) {
+    Row() {
+      Text(icon).fontSize(18).margin({ right: 8 })
+      Text(title)
+        .fontSize(16).fontWeight(FontWeight.Bold).fontColor(getTheme(this.themeMode).textPrimary)
+      if (subtitle.length > 0) {
+        Text(' · ' + subtitle)
+          .fontSize(12).fontColor(getTheme(this.themeMode).textSecondary)
+      }
+    }
+    .width('100%').margin({ bottom: 10 })
   }
 
   @Builder
