@@ -168,7 +168,7 @@ export struct SettingsDetailPage {
           }
           .width('100%').padding({ left: 16, right: 16, bottom: 20 })
         }
-        .layoutWeight(1).scrollBar(BarState.Off)
+        .width('100%').layoutWeight(1).scrollBar(BarState.Off).align(Alignment.TopStart)
       }
       .width('100%').height('100%').backgroundColor(getTheme(this.themeMode).pageBg)
 
