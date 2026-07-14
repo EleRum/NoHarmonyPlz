@@ -77,6 +77,7 @@ export interface PoiResult {
   distance: number;
   tel: string;
   id?: string;  // Amap POI ID，用于获取照片等详情
+  cost?: string; // 人均消费 (来自 biz_ext.cost)
 }
 
 /** 逆地理编码结果 */

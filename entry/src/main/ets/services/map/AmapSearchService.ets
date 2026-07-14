@@ -148,6 +148,7 @@ export class AmapSearchService {
               distance: isNaN(distNum) ? 0 : distNum,
               tel: (poi['tel'] as string) ?? '',
               id: (poi['id'] as string) ?? '',
+              cost: this.extractCost(poi),
             } as PoiResult);
           }
           Logger.info(TAG, 'REST search OK: %{public}d results', results.length);
@@ -203,12 +204,14 @@ export class AmapSearchService {
 
   /**
    * 导航路线计算（REST API 直连，绕过 JS Bridge）
+   * 支持传入不同 city/cityd 实现跨城公交查询
    */
   async directionRouteRest(
     fromLat: number, fromLng: number,
     toLat: number, toLng: number,
     mode: DirectionMode,
-    city?: string
+    city?: string,
+    cityd?: string
   ): Promise<NavRoute | null> {
     let type: string = 'driving';
     if (mode === DirectionMode.WALKING) type = 'walking';
@@ -221,10 +224,11 @@ export class AmapSearchService {
       `https://restapi.amap.com/v3/direction/${type}?key=${AMAP_KEY}` +
       `&origin=${origin}&destination=${dest}&extensions=all`;
 
-    // 公交需要 city + cityd 参数
+    // 公交需要 city + cityd 参数（不同值=跨城）
     if (mode === DirectionMode.TRANSIT) {
-      const cityName: string = city || '北京';
-      url += `&city=${encodeURIComponent(cityName)}&cityd=${encodeURIComponent(cityName)}`;
+      const cFrom: string = city || '北京';
+      const cTo: string = cityd || city || '北京';
+      url += `&city=${encodeURIComponent(cFrom)}&cityd=${encodeURIComponent(cTo)}`;
     }
 
     try {
@@ -266,7 +270,7 @@ export class AmapSearchService {
     const fullPath: LatLng[] = [];
 
     if (mode === DirectionMode.TRANSIT) {
-      // 公交：路径在 segments[].walking/bus/subway.polyline 中
+      // 公交/跨城：路径在 segments[].walking/bus/subway/railway/train/coach.polyline 中
       const segments: Object[] = (route['segments'] as Object[]) ?? [];
       for (let i: number = 0; i < segments.length; i++) {
         const seg = segments[i] as Record<string, Object>;
@@ -274,16 +278,106 @@ export class AmapSearchService {
         if (walking) {
           const wpoly: string = (walking['polyline'] as string) ?? '';
           for (const pt of this.parsePolyline(wpoly)) fullPath.push(pt);
+          steps.push({
+            instruction: (walking['instruction'] as string) ?? '步行',
+            road: '',
+            distance: parseInt((walking['distance'] as string) ?? '0'),
+            duration: parseInt((walking['duration'] as string) ?? '0'),
+            orientation: '', action: 'walking', path: this.parsePolyline(wpoly),
+          } as NavStep);
+        }
+        // 火车/高铁/动车
+        const railway = seg['railway'] as Record<string, Object> | undefined;
+        if (railway) {
+          const rpoly: string = (railway['polyline'] as string) ?? '';
+          for (const pt of this.parsePolyline(rpoly)) fullPath.push(pt);
+          const trip = (railway['trip'] as string) ?? '';
+          const departureStop = (railway['departure_stop'] as string) ?? '';
+          const arrivalStop = (railway['arrival_stop'] as string) ?? '';
+          const departureTime = (railway['departure_time'] as string) ?? '';
+          const arrivalTime = (railway['arrival_time'] as string) ?? '';
+          const price: string = (railway['price'] as string) ?? '';
+          const type: string = (railway['type'] as string) ?? '火车';
+          const distanceRail: number = parseInt((railway['distance'] as string) ?? '0');
+          const durationRail: number = parseInt((railway['duration'] as string) ?? '0');
+          const priceNum: number = parseFloat(price) || 0;
+          const label: string = `${type} ${trip}`;
+          steps.push({
+            instruction: `${label}: ${departureStop} ${departureTime} → ${arrivalStop} ${arrivalTime}${priceNum > 0 ? ' ¥' + priceNum : ''}`,
+            road: trip,
+            distance: isNaN(distanceRail) ? 0 : distanceRail,
+            duration: isNaN(durationRail) ? 0 : durationRail,
+            orientation: `${departureStop}→${arrivalStop}`,
+            action: type.includes('高铁') ? 'high_speed_rail' : (type.includes('动车') ? 'high_speed_rail' : 'train'),
+            path: this.parsePolyline(rpoly),
+          } as NavStep);
+          continue;
+        }
+        // 火车（旧版字段名）
+        const train = seg['train'] as Record<string, Object> | undefined;
+        if (train) {
+          const tpoly: string = (train['polyline'] as string) ?? '';
+          for (const pt of this.parsePolyline(tpoly)) fullPath.push(pt);
+          steps.push({
+            instruction: (train['instruction'] as string) ?? '火车',
+            road: (train['trip'] as string) ?? '',
+            distance: parseInt((train['distance'] as string) ?? '0'),
+            duration: parseInt((train['duration'] as string) ?? '0'),
+            orientation: '', action: 'train', path: this.parsePolyline(tpoly),
+          } as NavStep);
+          continue;
+        }
+        // 长途客车
+        const coach = seg['coach'] as Record<string, Object> | undefined;
+        if (coach) {
+          const copoly: string = (coach['polyline'] as string) ?? '';
+          for (const pt of this.parsePolyline(copoly)) fullPath.push(pt);
+          steps.push({
+            instruction: (coach['instruction'] as string) ?? '长途客车',
+            road: (coach['trip'] as string) ?? '',
+            distance: parseInt((coach['distance'] as string) ?? '0'),
+            duration: parseInt((coach['duration'] as string) ?? '0'),
+            orientation: '', action: 'bus', path: this.parsePolyline(copoly),
+          } as NavStep);
+          continue;
         }
         const bus = seg['bus'] as Record<string, Object> | undefined;
         if (bus) {
           const bpoly: string = (bus['polyline'] as string) ?? '';
           for (const pt of this.parsePolyline(bpoly)) fullPath.push(pt);
+          let busRoad: string = '';
+          const buslinesArr = bus['buslines'] as Object[] | undefined;
+          if (buslinesArr && buslinesArr.length > 0) {
+            const firstLine = buslinesArr[0] as Record<string, Object>;
+            busRoad = (firstLine['name'] as string) ?? '';
+          }
+          steps.push({
+            instruction: (bus['instruction'] as string) ?? '公交',
+            road: busRoad,
+            distance: parseInt((bus['distance'] as string) ?? '0'),
+            duration: parseInt((bus['duration'] as string) ?? '0'),
+            orientation: '', action: 'bus', path: this.parsePolyline(bpoly),
+          } as NavStep);
+          continue;
         }
         const subway = seg['subway'] as Record<string, Object> | undefined;
         if (subway) {
           const spoly: string = (subway['polyline'] as string) ?? '';
           for (const pt of this.parsePolyline(spoly)) fullPath.push(pt);
+          let subwayRoad: string = '';
+          const linesArr = subway['lines'] as Object[] | undefined;
+          if (linesArr && linesArr.length > 0) {
+            const firstLine = linesArr[0] as Record<string, Object>;
+            subwayRoad = (firstLine['name'] as string) ?? '';
+          }
+          steps.push({
+            instruction: (subway['instruction'] as string) ?? '地铁',
+            road: subwayRoad,
+            distance: parseInt((subway['distance'] as string) ?? '0'),
+            duration: parseInt((subway['duration'] as string) ?? '0'),
+            orientation: '', action: 'subway', path: this.parsePolyline(spoly),
+          } as NavStep);
+          continue;
         }
       }
     } else {
@@ -318,6 +412,16 @@ export class AmapSearchService {
   /**
    * 解析 polyline 字符串 "lng,lat;lng,lat;..." 为 LatLng[]
    */
+  /** 从高德POI结果提取人均消费 */
+  private extractCost(poi: Record<string, Object>): string {
+    const bizExt = poi['biz_ext'] as Record<string, Object> | undefined;
+    if (bizExt) {
+      const c = (bizExt['cost'] as string) ?? '';
+      if (c && c.length > 0) return c;
+    }
+    return '';
+  }
+
   private parsePolyline(polyline: string): LatLng[] {
     const result: LatLng[] = [];
     if (!polyline || polyline.length === 0) return result;
@@ -419,6 +523,7 @@ export class AmapSearchService {
                   distance: 0,
                   tel: (poi['tel'] as string) ?? '',
                   id: (poi['id'] as string) ?? '',
+                  cost: this.extractCost(poi),
                 } as PoiResult);
               }
               Logger.info(TAG, 'Text search "%{public}s" in "%{public}s": %{public}d results', keywords, cityFmt, results.length);
@@ -470,4 +575,163 @@ export class AmapSearchService {
     }
     return pois[0]?.name || '';
   }
+
+  /**
+   * 跨城交通搜索 — 查询两个城市间的火车/高铁/大巴方案
+   * 使用高德 transit/integrated API，传入不同的 city 和 cityd
+   * @returns 跨城交通方案列表
+   */
+  async searchIntercityTransport(
+    fromCity: string, toCity: string, date?: string
+  ): Promise<IntercityTransportOption[]> {
+    const fromLoc: LatLng | null = await this.geocodeCity(fromCity);
+    const toLoc: LatLng | null = await this.geocodeCity(toCity);
+    if (!fromLoc || !toLoc) {
+      Logger.warn(TAG, 'Intercity transport: failed to geocode cities');
+      return [];
+    }
+
+    // 两种城市名格式
+    const cfList: string[] = [fromCity, fromCity.endsWith('市') ? fromCity : fromCity + '市'];
+    const ctList: string[] = [toCity, toCity.endsWith('市') ? toCity : toCity + '市'];
+
+    const allOptions: IntercityTransportOption[] = [];
+
+    for (const cf of cfList) {
+      for (const ct of ctList) {
+        let tryUrl: string =
+          `https://restapi.amap.com/v3/direction/transit/integrated?key=${AMAP_KEY}` +
+          `&origin=${fromLoc.longitude},${fromLoc.latitude}` +
+          `&destination=${toLoc.longitude},${toLoc.latitude}` +
+          `&city=${encodeURIComponent(cf)}&cityd=${encodeURIComponent(ct)}` +
+          `&extensions=all`;
+        if (date && date.length > 0) tryUrl += `&date=${encodeURIComponent(date)}`;
+
+        try {
+          const bridge: PlatformBridge = PlatformBridge.getInstance();
+          const resp = await bridge.network.request(tryUrl, { method: 'GET' });
+          if (resp.responseCode !== 200 || !resp.result) continue;
+          const json = JSON.parse(resp.result) as Record<string, Object>;
+          if ((json['status'] as string) !== '1') {
+            continue;
+          }
+          const routeData = json['route'] as Record<string, Object>;
+          const transits: Object[] = (routeData?.['transits'] as Object[]) ?? [];
+          Logger.info(TAG, 'Transit %{public}s→%{public}s: %{public}d transits', cf, ct, transits.length);
+
+          const options: IntercityTransportOption[] = [];
+          for (let t: number = 0; t < transits.length; t++) {
+            const transit = transits[t] as Record<string, Object>;
+            const segments: Object[] = (transit['segments'] as Object[]) ?? [];
+            const totalDist: number = parseInt((transit['distance'] as string) ?? '0');
+            const totalDur: number = parseInt((transit['duration'] as string) ?? '0');
+
+            for (let s: number = 0; s < segments.length; s++) {
+              const seg = segments[s] as Record<string, Object>;
+              // 统一提取火车数据: railway 段(K/T/Z) 或 bus 段(G/D/C type=2011/2012/2013)
+              let trainSrc: Record<string, Object> | undefined = undefined;
+              let isBusTrain: boolean = false;
+              const railway = seg['railway'] as Record<string, Object> | undefined;
+              if (railway) {
+                trainSrc = railway;
+              } else {
+                const bus = seg['bus'] as Record<string, Object> | undefined;
+                const busType: string = bus ? ((bus['type'] as string) || '') : '';
+                if (busType === '2011' || busType === '2012' || busType === '2013') {
+                  trainSrc = bus;
+                  isBusTrain = true;
+                }
+              }
+              if (!trainSrc) continue;
+
+              const trip: string = isBusTrain ?
+                ((trainSrc['name'] as string) || (trainSrc['trip'] as string) || '') :
+                ((trainSrc['trip'] as string) || (trainSrc['name'] as string) || '');
+              const typeCode: string = (trainSrc['type'] as string) || '';
+
+              const depObj = trainSrc['departure_stop'] as Record<string, Object> | undefined;
+              const arrObj = trainSrc['arrival_stop'] as Record<string, Object> | undefined;
+              let depStop: string = depObj ? ((depObj['name'] as string) ?? '') : '';
+              let arrStop: string = arrObj ? ((arrObj['name'] as string) ?? '') : '';
+              if (!trip && !depStop && !arrStop) continue;
+              let depTimeRaw: string = depObj ? ((depObj['time'] as string) ?? '') : '';
+              let arrTimeRaw: string = arrObj ? ((arrObj['time'] as string) ?? '') : '';
+
+              const fmtTm = (raw: string): string => {
+                if (!raw) return '';
+                let n = parseInt(raw);
+                if (isNaN(n)) return raw;
+                if (n >= 2400) n -= 2400;
+                let h = Math.floor(n / 100);
+                let m = n % 100;
+                return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+              };
+
+              const dist: number = parseInt((trainSrc['distance'] as string) ?? '0') || 0;
+              const durSec: number = parseInt((trainSrc['time'] as string) ?? '0') || totalDur || 0;
+
+              let price: number = 0;
+              if (isBusTrain) {
+                price = parseFloat((trainSrc['price'] as string) ?? '0') || 0;
+              } else {
+                const alters = trainSrc['alters'] as Object[] | undefined;
+                if (alters && alters.length > 0) {
+                  const sps = (alters[0] as Record<string, Object>)['spaces'] as Object[] | undefined;
+                  if (sps) {
+                    for (const sp of sps) {
+                      let c = parseFloat(((sp as Record<string, Object>)['cost'] as string) ?? '0') || 0;
+                      if (c > 0 && (price === 0 || c < price)) price = c;
+                    }
+                  }
+                }
+              }
+
+              let mode: string = 'train';
+              if (typeCode === '2011' || typeCode === '2012' || typeCode === '2013' || isBusTrain) mode = 'high_speed_rail';
+              if (trip && (trip.startsWith('G') || trip.startsWith('D') || trip.startsWith('C'))) mode = 'high_speed_rail';
+
+              options.push({
+                type: mode, trip: trip || (mode === 'high_speed_rail' ? '高铁' : '火车'),
+                fromStation: depStop || fromCity, toStation: arrStop || toCity,
+                departureTime: fmtTm(depTimeRaw), arrivalTime: fmtTm(arrTimeRaw),
+                duration: (!isNaN(durSec) && durSec > 0) ? durSec : 0,
+                distance: isNaN(dist) ? (isNaN(totalDist) ? 0 : totalDist) : dist,
+                price: price,
+              } as IntercityTransportOption);
+            }
+          }
+
+          // 合并去重（按车次）
+          for (const opt of options) {
+            let dup: boolean = false;
+            for (const existing of allOptions) {
+              if (existing.trip && opt.trip && existing.trip === opt.trip) { dup = true; break; }
+            }
+            if (!dup) allOptions.push(opt);
+          }
+        } catch (e) {
+          Logger.warn(TAG, 'Transit request failed %{public}s→%{public}s', cf, ct);
+        }
+      } // ct
+    } // cf
+
+    Logger.info(TAG, 'Intercity transport %{public}s→%{public}s: %{public}d options',
+      fromCity, toCity, allOptions.length);
+    return allOptions;
+  }
+
+}
+
+/** 跨城交通方案 */
+export interface IntercityTransportOption {
+  type: string;           // train / high_speed_rail / flight / bus
+  trip: string;           // 车次/航班号 e.g. "G89"
+  fromStation: string;    // 出发站
+  toStation: string;      // 到达站
+  departureTime: string;  // "08:30"
+  arrivalTime: string;    // "17:00"
+  duration: number;       // 秒
+  distance: number;       // 米
+  price: number;          // 预估票价(元)
+  note?: string;
 }

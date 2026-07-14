@@ -14,7 +14,8 @@ import { MapJsBridge } from '../services/map/MapJsBridge';
 import {
   LatLng, MapInitConfig, NavRoute, DirectionMode, PoiResult
 } from '../services/map/MapTypes';
-import { TourPlan, TourDay } from '../model/TourPlan';
+import { TourPlan, TourDay, InterCityTransport, getBudgetBreakdown, getTransportEmoji, getTransportLabel, migrateTourPlan } from '../model/TourPlan';
+import { IntercityTransportOption } from '../services/map/AmapSearchService';
 import { UserBasicInfo } from '../model/UserBasicInfo';
 import { Dao } from '../database/Dao';
 
@@ -54,6 +55,7 @@ export struct TourGuideContent {
   @State poiDetailAddr: string = '';
   @State poiDetailInfo: string = '';
   @State quickReplies: string[] = [];
+  @State transportOptions: IntercityTransportOption[] = [];
   private quickReplyPoiData: PoiResult[] = [];
   private dayPolylines: string[] = [];
   private dayMarkers: string[][] = [];
@@ -73,7 +75,7 @@ export struct TourGuideContent {
         const dao = Dao.getInstance();
         const saved = await dao.queryUserProfile('tour_plan');
         if (saved && saved.preferenceValue) {
-          this.plan = JSON.parse(saved.preferenceValue) as TourPlan;
+          this.plan = migrateTourPlan(JSON.parse(saved.preferenceValue) as TourPlan);
           g_planState.plan = this.plan;
         }
         const savedChat = await dao.queryUserProfile('tour_chat');
@@ -185,7 +187,6 @@ export struct TourGuideContent {
       const resp: AgentResponse = await this.agent.process(input);
 
       if (resp.toolCall) {
-        // AI 需要执行工具 → 显示提示，自动执行，再继续
         this.chatMessages.push({
           role: 'ai',
           content: resp.text + '\n\n🔍 正在查找...'
@@ -199,10 +200,18 @@ export struct TourGuideContent {
         }
       }
     } catch (_e) {
+      // 清理占位
+      if (this.chatMessages.length > 0) {
+        const last: ChatBubble = this.chatMessages[this.chatMessages.length - 1];
+        if (last.content.includes('🔍')) {
+          this.chatMessages = this.chatMessages.slice(0, -1);
+        }
+      }
       this.chatMessages.push({ role: 'ai', content: '抱歉，出错了。请再试一次。' });
+    } finally {
+      this.saveState();
+      this.isAiThinking = false;
     }
-    this.saveState();
-    this.isAiThinking = false;
   }
 
   /** 自动执行工具调用并继续对话
@@ -226,6 +235,14 @@ export struct TourGuideContent {
       if (toolCall.timeSlot) params['timeSlot'] = toolCall.timeSlot;
       if (toolCall.note) params['note'] = toolCall.note;
       if (toolCall.mode) params['mode'] = toolCall.mode;
+      if (toolCall.from) params['from'] = toolCall.from;
+      if (toolCall.to) params['to'] = toolCall.to;
+      if (toolCall.departureTime) params['departureTime'] = toolCall.departureTime;
+      if (toolCall.arrivalTime) params['arrivalTime'] = toolCall.arrivalTime;
+      if (toolCall.number) params['number'] = toolCall.number;
+      if (toolCall.amount) params['amount'] = toolCall.amount;
+      if (toolCall.cost) params['cost'] = toolCall.cost;
+      if (toolCall.date) params['date'] = toolCall.date;
 
       // 第一阶段：执行工具（快速，不等待 AI）
       const resp: AgentResponse = await this.agent.executeToolAndContinue(toolCall.action, params);
@@ -245,31 +262,60 @@ export struct TourGuideContent {
         if (resp.markers && resp.markers.length > 0) {
           this.showMarkersOnMap(resp.markers);
         }
+        // 展示交通方案列表
+        if (resp.transportOptions && resp.transportOptions.length > 0) {
+          this.transportOptions = resp.transportOptions;
+        }
         this.updateQuickReplies(resp.markers || [], toolCall.action);
       }
 
-      // 第二阶段：询问 AI 下一步（可能较慢，但不阻塞地图更新）
-      const aiResp = await this.agent.askAiNextStep(toolCall.action, resp.text);
-      const nextTool: ToolCall | undefined = aiResp.toolCall;
+      // 第二阶段：询问 AI 下一步
+      let nextTool: ToolCall | undefined = undefined;
+      try {
+        const aiResp = await this.agent.askAiNextStep(toolCall.action, resp.text);
+        nextTool = aiResp.toolCall;
 
-      // 替换占位消息并显示 AI 回复
+        // 替换占位消息并显示 AI 回复
+        if (this.chatMessages.length > 0) {
+          const last = this.chatMessages[this.chatMessages.length - 1];
+          if (last.content.includes('🔍')) {
+            this.chatMessages = this.chatMessages.slice(0, -1);
+          }
+        }
+        // 如果有意义的回复才添加，否则保留 Phase 1 的结果
+        if (aiResp.text && aiResp.text.length > 2 && aiResp.text !== '收到，请继续。') {
+          this.chatMessages.push({ role: 'ai', content: aiResp.text });
+        }
+        this.saveState();
+
+        // 链式调用：AI 下一步 OR 系统自动串联
+        const chainTool: ToolCall | undefined = nextTool || resp.toolCall;
+        Logger.info(TAG, 'Chain check: nextTool=%{public}s respTool=%{public}s → chain=%{public}s',
+          nextTool?.action || 'null', resp.toolCall?.action || 'null', chainTool?.action || 'null');
+        if (chainTool) {
+          this.chatMessages.push({ role: 'ai', content: '🔍 ' + chainTool.action + '...' });
+          await this.autoExecuteTool(chainTool);
+        }
+      } catch (_e) {
+        // Phase 2 失败不丢 Phase 1 的结果，只去掉 🔍 占位
+        if (this.chatMessages.length > 0) {
+          const last = this.chatMessages[this.chatMessages.length - 1];
+          if (last.content.includes('🔍')) {
+            this.chatMessages = this.chatMessages.slice(0, -1);
+          }
+        }
+        Logger.warn(TAG, 'askAiNextStep failed, keeping phase1 result');
+      }
+    } catch (e) {
+      Logger.error(TAG, 'autoExecuteTool failed for %{public}s: %{public}s',
+        toolCall.action, JSON.stringify(e));
+      // 去掉占位消息
       if (this.chatMessages.length > 0) {
         const last = this.chatMessages[this.chatMessages.length - 1];
         if (last.content.includes('🔍')) {
           this.chatMessages = this.chatMessages.slice(0, -1);
         }
       }
-      this.chatMessages.push({ role: 'ai', content: aiResp.text });
-      this.saveState();
-
-      // 继续下一工具
-      if (nextTool) {
-        this.chatMessages.push({ role: 'ai', content: '🔍 ' + nextTool.action + '...' });
-        await this.autoExecuteTool(nextTool);
-      }
-    } catch (e) {
-      Logger.error(TAG, 'autoExecuteTool failed for %{public}s: %{public}s',
-        toolCall.action, JSON.stringify(e));
       this.chatMessages.push({ role: 'ai', content: '😅 ' + toolCall.action + '执行出错，请再试一次。' });
     }
   }
@@ -338,6 +384,12 @@ export struct TourGuideContent {
     // 每次新消息都清除旧快捷回复，确保不残留
     this.quickReplies = [];
 
+    // 城市定位后 → 主动引导交通和预算
+    if (action === 'geocode_city') {
+      this.quickReplies = ['🚄查车次', '🚄高铁', '✈️飞机', '设预算'];
+      return;
+    }
+
     // 搜索结果 → 显示前几个选项 + 换一批
     if (action === 'search_hotels' || action === 'search_poi' || action === 'search_and_add') {
       for (let i: number = 0; i < markers.length && i < 5; i++) {
@@ -349,7 +401,25 @@ export struct TourGuideContent {
 
     // 计划刚生成 → 引导添加景点
     if (action === 'make_plan' && this.plan && this.plan.dailyPlans.length > 0) {
-      this.quickReplies = ['加景点', '加美食', '改酒店', '删景点'];
+      this.quickReplies = ['加景点', '加美食', '设预算', '改酒店', '删景点'];
+      return;
+    }
+
+    // 预算设置后 → 引导估算
+    if (action === 'set_budget') {
+      this.quickReplies = ['估算花费', '加景点', '加美食', '看看行程'];
+      return;
+    }
+
+    // 估算花费后
+    if (action === 'estimate_costs') {
+      this.quickReplies = ['加景点', '削预算', '看看行程'];
+      return;
+    }
+
+    // 交通设置后
+    if (action === 'set_transport') {
+      this.quickReplies = ['设预算', '搜酒店', '加景点'];
       return;
     }
 
@@ -365,6 +435,35 @@ export struct TourGuideContent {
     }
   }
 
+  /** 选中交通方案 → 填入聊天并发送 */
+  /** 选中交通方案 → 直接记录，不经过AI */
+  async selectTransportOption(opt: IntercityTransportOption): Promise<void> {
+    this.transportOptions = [];
+    const label: string = getTransportLabel(opt.type);
+    // 直接构造 toolCall 并执行
+    const toolCall: ToolCall = {
+      action: 'set_transport',
+      type: opt.type,
+      from: opt.fromStation || '',
+      to: opt.toStation || '',
+      departureTime: opt.departureTime || '',
+      arrivalTime: opt.arrivalTime || '',
+      number: opt.trip || '',
+      cost: opt.price > 0 ? opt.price.toString() : '',
+    };
+    // 显示确认消息
+    const confirmText: string = `已选择 ${getTransportEmoji(opt.type)} ${opt.trip || label} ${opt.fromStation}${opt.departureTime ? ' ' + opt.departureTime : ''} → ${opt.toStation}${opt.arrivalTime ? ' ' + opt.arrivalTime : ''}${opt.price > 0 ? ' ¥' + opt.price : ''}`;
+    this.chatMessages.push({ role: 'user', content: confirmText });
+    this.isAiThinking = true;
+    try {
+      await this.autoExecuteTool(toolCall);
+    } catch (_e) {
+      this.chatMessages.push({ role: 'ai', content: '记录交通方案失败，请重试。' });
+    } finally {
+      this.isAiThinking = false;
+    }
+  }
+
   /** 点击快捷回复 */
   onQuickReply(reply: string): void {
     if (reply === '🔄 换一批') {
@@ -372,20 +471,33 @@ export struct TourGuideContent {
       this.sendMessage();
       return;
     }
+    if (reply === '🚄查车次') {
+      // 直接触发搜索：用当前计划城市作为目的地，让AI问出发城市
+      const dest: string = this.plan?.city || '';
+      if (dest) {
+        // 如果有 plan.transportToCity.from，直接查
+        const fromCity: string = this.plan?.transportToCity?.from || '';
+        if (fromCity) {
+          // 已知出发城市 → 让系统检测到交通意图
+          this.chatInput = `${fromCity}到${dest}高铁`;
+        } else {
+          this.chatInput = `怎么去${dest}`;
+        }
+      } else {
+        this.chatInput = '查车次';
+      }
+      this.sendMessage();
+      return;
+    }
     this.chatInput = reply;
     this.sendMessage();
   }
-
-  private drawGeneration: number = 0;
 
   /** 在地图上绘制计划路线
    *  标记立即显示，路线在后台计算完成后更新 */
   async drawPlanOnMap(plan: TourPlan): Promise<void> {
     const ms = this.mapService;
     if (!ms || !this.isMapReady) return;
-
-    // 递增代数，使之前未完成的 Phase 2 失效
-    const gen: number = ++this.drawGeneration;
 
     // 清除旧路线
     this.clearPlanOverlays();
@@ -403,9 +515,18 @@ export struct TourGuideContent {
       const markers: string[] = [];
 
       for (const poi of day.pois) {
+        // 跳过无效坐标（但酒店允许0,0兜底用城市中心）
+        if ((poi.lat === 0 && poi.lng === 0) && !poi.type.includes('酒店')) continue;
+        let lat: number = poi.lat;
+        let lng: number = poi.lng;
+        // 酒店坐标为0时用城市中心兜底
+        if (lat === 0 && lng === 0 && poi.type.includes('酒店')) {
+          lat = plan.cityLat || 39.9;
+          lng = plan.cityLng || 116.4;
+        }
         const emoji: string = this.poiEmoji(poi.type);
         const markerId: string = ms.addMarker({
-          position: { latitude: poi.lat, longitude: poi.lng },
+          position: { latitude: lat, longitude: lng },
           iconStyle: { color: color, size: 20, text: emoji },
           title: poi.name,
           snippet: poi.timeSlot,
@@ -414,7 +535,7 @@ export struct TourGuideContent {
         });
         markers.push(markerId);
         this.markerPoiMap[markerId] = {
-          name: poi.name, type: poi.type, latitude: poi.lat, longitude: poi.lng,
+          name: poi.name, type: poi.type, latitude: lat, longitude: lng,
           address: poi.note || '', distance: 0, tel: '', id: ''
         } as PoiResult;
       }
@@ -425,6 +546,22 @@ export struct TourGuideContent {
           points: day.route.path, color: color, width: 6, zIndex: 50, clickable: false,
         });
         this.dayPolylines.push(polyId);
+      } else if (day.pois.length >= 2) {
+        // 兜底：没路线时画POI间直线(跳过0,0)
+        const pts: LatLng[] = [];
+        for (const p of day.pois) {
+          if (p.lat !== 0 || p.lng !== 0) {
+            pts.push({ latitude: p.lat, longitude: p.lng } as LatLng);
+          }
+        }
+        if (pts.length >= 2) {
+          const polyId: string = ms.addPolyline({
+            points: pts, color: color, width: 4, zIndex: 49, clickable: false,
+          });
+          this.dayPolylines.push(polyId);
+        } else {
+          this.dayPolylines.push('');
+        }
       } else {
         this.dayPolylines.push('');
       }
@@ -461,8 +598,6 @@ export struct TourGuideContent {
           allPts.push(fallbackB);
         }
       }
-      // 检查代数：如果期间有新绘制启动，放弃本次结果
-      if (gen !== this.drawGeneration) return;
       if (allPts.length > 0) {
         day.route = { distance: 0, duration: 0, path: allPts, steps: [], origin: '', destination: '' } as NavRoute;
         if (this.dayPolylines[d] && this.dayPolylines[d].length > 0) {
@@ -514,10 +649,69 @@ export struct TourGuideContent {
   poiEmoji(type: string): string {
     if (type.includes('酒店') || type.includes('住宿')) return '🏨';
     if (type.includes('餐厅') || type.includes('美食') || type.includes('小吃')) return '🍽️';
-    if (type.includes('景点') || type.includes('公园') || type.includes('风景')) return '🏛️';
+    if (type.includes('景点') || type.includes('公园') || type.includes('风景') || type.includes('博物馆')) return '🏛️';
     if (type.includes('购物') || type.includes('商场')) return '🛍️';
     if (type.includes('咖啡') || type.includes('茶')) return '☕';
+    if (type.includes('飞机') || type.includes('✈️')) return '✈️';
+    if (type.includes('高铁') || type.includes('🚄')) return '🚄';
+    if (type.includes('火车') || type.includes('🚂')) return '🚂';
+    if (type.includes('大巴') || type.includes('🚌')) return '🚌';
+    if (type.includes('交通')) return '🚗';
     return '📍';
+  }
+
+  /** 计算已花费总额 */
+  private calcSpentTotal(): number {
+    const br = this.plan ? getBudgetBreakdown(this.plan) : null;
+    return br ? br.total : 0;
+  }
+
+  /** 格式化时长（秒→小时，保留1位小数） */
+  private fmtDur(seconds: number): string {
+    return (Math.round(seconds / 3600 * 10) / 10).toFixed(1);
+  }
+
+  /** 计算行程卡片的 Y 偏移（避开上方交通信息/预算条） */
+  private calcItineraryY(): number {
+    let y: number = 40;
+    if (this.plan && (this.plan.transportToCity || this.plan.transportBack)) y += 32;
+    if (this.plan && this.plan.totalBudget && this.plan.totalBudget > 0) y += 32;
+    return y;
+  }
+
+  /** 计算预算使用比例 */
+  private calcBudgetRatio(): number {
+    if (!this.plan || !this.plan.totalBudget || this.plan.totalBudget <= 0) return 0;
+    return Math.min(1, this.calcSpentTotal() / this.plan.totalBudget);
+  }
+
+  @Builder
+  TransportInfoRow(transport: InterCityTransport, label: string) {
+    Row() {
+      Text(getTransportEmoji(transport.type)).fontSize(14)
+      Column() {
+        Text(`${label}: ${transport.from} → ${transport.to}`)
+          .fontSize(11).fontColor(getTheme(this.themeMode).textPrimary)
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        Row() {
+          if (transport.number) {
+            Text(transport.number).fontSize(9).fontColor('#3B82F6')
+              .margin({ right: 6 })
+          }
+          if (transport.departureTime) {
+            Text(transport.departureTime).fontSize(9).fontColor(getTheme(this.themeMode).textSecondary)
+          }
+          if (transport.arrivalTime) {
+            Text(' → ' + transport.arrivalTime).fontSize(9).fontColor(getTheme(this.themeMode).textSecondary)
+          }
+          if (transport.cost && transport.cost > 0) {
+            Text(`  ¥${transport.cost}`).fontSize(9).fontColor('#F59E0B')
+          }
+        }
+      }
+      .alignItems(HorizontalAlign.Start).margin({ left: 6 }).layoutWeight(1)
+    }
+    .width('100%').margin({ bottom: 2 })
   }
 
   build() {
@@ -559,11 +753,42 @@ export struct TourGuideContent {
           .position({ x: 0, y: 0 }).zIndex(10)
         }
 
-        // 行程卡片
+        // 行程卡片 + 交通信息 + 预算（三合一）
         if (this.plan && this.plan.dailyPlans.length > 0) {
           Column() {
-            Text(this.plan.dailyPlans[this.selectedDayIndex].label + ' 行程')
-              .fontSize(13).fontWeight(FontWeight.Bold).fontColor(getTheme(this.themeMode).textPrimary).margin({ bottom: 4 })
+            // 标题行：日期 + 交通 + 预算
+            Row() {
+              Text(this.plan.dailyPlans[this.selectedDayIndex].label + ' 行程')
+                .fontSize(13).fontWeight(FontWeight.Bold)
+                .fontColor(getTheme(this.themeMode).textPrimary)
+              // 交通小标
+              if (this.plan.transportToCity) {
+                Text(' ' + getTransportEmoji(this.plan.transportToCity.type) + ' ' +
+                  (this.plan.transportToCity.number || getTransportLabel(this.plan.transportToCity.type)))
+                  .fontSize(9).fontColor('#3B82F6')
+                  .padding({ left: 4, right: 4, top: 1, bottom: 1 })
+                  .backgroundColor('#EFF6FF').borderRadius(4)
+              }
+              Blank()
+              // 预算摘要
+              if (this.plan.totalBudget && this.plan.totalBudget > 0) {
+                Text(`💰 ¥${this.calcSpentTotal()}/¥${this.plan.totalBudget}`)
+                  .fontSize(9).fontColor(this.calcSpentTotal() > this.plan.totalBudget! ? '#FF5252' : '#10B981')
+              }
+            }.width('100%').margin({ bottom: 4 })
+
+            // 进度条（有预算时）
+            if (this.plan.totalBudget && this.plan.totalBudget > 0) {
+              Row() {
+                Row() {}
+                  .width(`${(this.calcBudgetRatio() * 100).toFixed(0)}%`).height('100%')
+                  .backgroundColor(this.calcBudgetRatio() > 1 ? '#FF5252' : '#10B981')
+                  .borderRadius(1)
+              }
+              .width('100%').height(3).backgroundColor('#E8E8E8').borderRadius(1).margin({ bottom: 4 })
+            }
+
+            // POI 横滑列表
             Scroll() {
               Row() {
                 ForEach(this.plan.dailyPlans[this.selectedDayIndex].pois, (poi: import('../model/TourPlan').TourPoiItem, pidx: number) => {
@@ -572,6 +797,9 @@ export struct TourGuideContent {
                     Text(poi.name).fontSize(9).fontColor(getTheme(this.themeMode).textSecondary).maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
                     Text(poi.timeSlot).fontSize(8).fontColor(getTheme(this.themeMode).textSecondary)
+                    if (poi.estimatedCost && poi.estimatedCost > 0) {
+                      Text(`¥${poi.estimatedCost}`).fontSize(8).fontColor('#F59E0B')
+                    }
                   }
                   .width(72).padding(4).alignItems(HorizontalAlign.Center)
                 }, (poi: import('../model/TourPlan').TourPoiItem, pidx: number): string => `${pidx}_${poi.name}_${poi.timeSlot}`)
@@ -580,7 +808,7 @@ export struct TourGuideContent {
           }
           .width('90%').padding(8)
           .backgroundColor('#CCFFFFFF').borderRadius(12)
-          .position({ x: '5%', y: 40 }).zIndex(10)
+          .position({ x: '5%', y: 40 }).zIndex(9)
         }
 
         // POI 详情弹窗
@@ -621,6 +849,8 @@ export struct TourGuideContent {
             .onClick(() => {
               this.agent.reset();
               this.plan = null;
+              this.isAiThinking = false;
+              this.selectedDayIndex = 0;
               this.chatMessages = [
                 { role: 'ai', content: '你好！我是小途 🗺️\n想规划一次旅行吗？告诉我目的地和天数，我帮你安排！比如"想去成都玩3天"。' }
               ];
@@ -630,6 +860,7 @@ export struct TourGuideContent {
               this.clearPlanOverlays();
               this.clearCurrentMarkers();
               this.quickReplies = [];
+              this.transportOptions = [];
               this.selectedDayIndex = 0;
             })
           if (this.isAiThinking) {
@@ -670,6 +901,65 @@ export struct TourGuideContent {
               })
             }.padding({ left: 4, right: 4 })
           }.scrollable(ScrollDirection.Horizontal).height(36).margin({ bottom: 6 })
+        }
+
+        // 交通方案选择列表
+        if (this.transportOptions.length > 0) {
+          Column() {
+            Row() {
+              Text('🚄 交通方案').fontSize(12).fontWeight(FontWeight.Bold)
+                .fontColor(getTheme(this.themeMode).textPrimary)
+              Blank()
+              Text('✕').fontSize(14).fontColor(getTheme(this.themeMode).textSecondary)
+                .onClick(() => { this.transportOptions = []; })
+            }.width('100%').margin({ bottom: 4 })
+            Scroll() {
+              Column() {
+                ForEach(this.transportOptions, (opt: IntercityTransportOption, idx: number) => {
+                  Column() {
+                    Row() {
+                      Text(getTransportEmoji(opt.type)).fontSize(18).margin({ right: 8 })
+                      Column() {
+                        Text(opt.trip || getTransportLabel(opt.type))
+                          .fontSize(13).fontWeight(FontWeight.Medium)
+                          .fontColor(getTheme(this.themeMode).textPrimary)
+                        Row() {
+                          Text(opt.fromStation).fontSize(11).fontColor(getTheme(this.themeMode).textSecondary)
+                          Text(' → ').fontSize(11).fontColor(getTheme(this.themeMode).textTertiary)
+                          Text(opt.toStation).fontSize(11).fontColor(getTheme(this.themeMode).textSecondary)
+                        }
+                        if (opt.departureTime) {
+                          Text(`${opt.departureTime} → ${opt.arrivalTime}`)
+                            .fontSize(10).fontColor(getTheme(this.themeMode).textTertiary)
+                        }
+                      }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+                      Column() {
+                        if (opt.price > 0) {
+                          Text(`¥${opt.price}`).fontSize(13).fontWeight(FontWeight.Bold)
+                            .fontColor('#F59E0B')
+                        }
+                        if (opt.duration > 0) {
+                          Text(`约${this.fmtDur(opt.duration)}h`)
+                            .fontSize(10).fontColor(getTheme(this.themeMode).textSecondary)
+                        }
+                      }.alignItems(HorizontalAlign.End)
+                      Text('›').fontSize(18).fontColor(getTheme(this.themeMode).textTertiary)
+                        .margin({ left: 6 })
+                    }
+                  }
+                  .width('100%').padding(8)
+                  .backgroundColor(getTheme(this.themeMode).surface)
+                  .border({ width: { bottom: 0.5 }, color: getTheme(this.themeMode).border })
+                  .onClick(() => {
+                    this.selectTransportOption(opt);
+                })
+                })
+              }
+            }.height(this.transportOptions.length > 3 ? 180 : (this.transportOptions.length * 60 + 8)).margin({ bottom: 6 })
+          }
+          .padding(8).backgroundColor(isDarkTheme() ? '#1E2A45' : '#F0F7FF')
+          .borderRadius(10).margin({ bottom: 6 })
+          .border({ width: 0.5, color: '#3B82F640' })
         }
 
         Row() {
