@@ -59,6 +59,8 @@ export struct TourGuideContent {
   private dayMarkers: string[][] = [];
   private pendingToolCall: ToolCall | null = null;
   private markerPoiMap: Record<string, PoiResult> = {};
+  private lastThemeDark: boolean = false;
+  private themePoller: number | null = null;
 
   async aboutToAppear(): Promise<void> {
     // 从内存恢复
@@ -101,6 +103,27 @@ export struct TourGuideContent {
         { role: 'ai', content: '你好！我是小途 🗺️\n想规划一次旅行吗？告诉我目的地和天数，我帮你安排！比如"想去成都玩3天"。' }
       ];
     }
+
+    // 轮询检测深色模式变化 → 切换地图样式
+    this.lastThemeDark = isDarkTheme();
+    this.themePoller = setInterval(() => {
+      const darkNow: boolean = isDarkTheme();
+      if (darkNow !== this.lastThemeDark && this.mapService) {
+        this.lastThemeDark = darkNow;
+        try {
+          this.mapService.setMapStyle(darkNow ? 'amap://styles/dark' : 'amap://styles/light');
+          this.mapService.setDarkMode(darkNow);
+          Logger.info(TAG, 'Tour map style switched to %{public}s', darkNow ? 'dark' : 'light');
+        } catch (e) {}
+      }
+    }, 2000);
+  }
+
+  aboutToDisappear(): void {
+    if (this.themePoller) {
+      clearInterval(this.themePoller);
+      this.themePoller = null;
+    }
   }
 
   private saveState(): void {
@@ -130,6 +153,7 @@ export struct TourGuideContent {
         Logger.info(TAG, 'Tour map ready');
         if (isDarkTheme() && this.mapService) {
           this.mapService.setMapStyle('amap://styles/dark');
+          this.mapService.setDarkMode(true);
         }
         if (this.plan && this.plan.dailyPlans.length > 0) {
           this.drawPlanOnMap(this.plan);
