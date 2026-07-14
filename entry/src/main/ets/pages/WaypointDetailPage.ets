@@ -532,7 +532,8 @@ struct WaypointDetailPage {
             Text('修改地点名称').fontSize(16).fontWeight(FontWeight.Medium).fontColor(getTheme(this.themeMode).textPrimary)
               .width('100%').textAlign(TextAlign.Center).padding({ top: 16, bottom: 12 })
             TextInput({ placeholder: '输入新名称', text: this.editPoiName })
-              .fontSize(14).placeholderColor(getTheme(this.themeMode).textTertiary).height(44).width('100%')
+              .fontSize(14).fontColor(getTheme(this.themeMode).textPrimary)
+              .placeholderColor(getTheme(this.themeMode).textTertiary).height(44).width('100%')
               .backgroundColor(getTheme(this.themeMode).pageBg).borderRadius(8)
               .onChange((value: string) => { this.editPoiName = value; })
             Row() {

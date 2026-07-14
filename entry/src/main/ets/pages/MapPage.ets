@@ -1832,7 +1832,7 @@ export struct MapPage {
                   // 搜索栏
                   Row() {
                     TextInput({ placeholder: '搜索目的地...', text: this.navSearchQuery }).placeholderColor(getTheme(this.themeMode).textTertiary)
-                      .fontSize(13).height(36).layoutWeight(1)
+                      .fontSize(13).fontColor(getTheme(this.themeMode).textPrimary).height(36).layoutWeight(1)
                       .backgroundColor(getTheme(this.themeMode).surfaceSecondary).borderRadius(18).padding({ left: 12, right: 12 })
                       .onChange((v: string) => { this.navSearchQuery = v; })
                     Button('搜索')
