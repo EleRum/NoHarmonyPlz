@@ -41,6 +41,8 @@ export default class EntryAbility extends UIAbility {
       Logger.info(APP_TAG, 'Database initialized');
       await MockDataService.injectIfEmpty(Dao.getInstance());
       Logger.info(APP_TAG, 'Mock data injected — MapPage can now load');
+      // 从数据库恢复主题设置（深色/浅色模式持久化）
+      await this.restoreTheme();
     });
 
     // ═════════════ ③ 后台服务 ═════════════
@@ -65,6 +67,19 @@ export default class EntryAbility extends UIAbility {
       this.locationService.startTracking();
       Logger.info(APP_TAG, 'Location service started');
     });
+  }
+
+  /** 从数据库恢复主题设置（深色/浅色模式） */
+  private async restoreTheme(): Promise<void> {
+    try {
+      const pref = await Dao.getInstance().queryUserProfile('theme_is_dark');
+      if (pref && pref.preferenceValue && pref.preferenceValue.length > 0) {
+        AppStorage.setOrCreate('theme_is_dark', pref.preferenceValue);
+        Logger.info(APP_TAG, 'Theme restored from DB: %{public}s', pref.preferenceValue);
+      }
+    } catch (e) {
+      // 数据库未就绪等，静默跳过
+    }
   }
 
   onDestroy(): void {

@@ -109,7 +109,10 @@ export struct ProfileContent {
             .fontSize(FONT.caption).fontColor(getTheme(this.themeMode).textSecondary)
           Blank()
           Toggle({ type: ToggleType.Switch, isOn: isDarkTheme() })
-            .onChange((isOn: boolean) => { toggleTheme(); }).height(28)
+            .onChange((isOn: boolean) => {
+              toggleTheme();
+              this.dao.upsertUserProfile('theme_is_dark', isOn ? 'dark' : 'light', 1);
+            }).height(28)
         }
         .width('100%')
       }
