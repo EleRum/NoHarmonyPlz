@@ -138,12 +138,18 @@ export function getBudgetBreakdown(plan: TourPlan): BudgetBreakdown {
   if (plan.transportToCity?.cost) transport += plan.transportToCity.cost;
   if (plan.transportBack?.cost) transport += plan.transportBack.cost;
 
+  // 酒店花费：统一从 plan.hotel.estimatedCost 计算（避免每日 POI 重复计数）
+  if (plan.hotel?.estimatedCost) {
+    hotel += plan.hotel.estimatedCost;
+  }
+
   for (const day of plan.dailyPlans) {
     for (const poi of day.pois) {
       const c: number = poi.estimatedCost ?? 0;
       const t: string = poi.type || '';
-      if (t.includes('酒店') || t.includes('住宿')) {
-        hotel += c;
+      // 跳过标记类型：酒店由 plan.hotel.estimatedCost 统一表达，到达/出发/返回为路线标记
+      if (t.includes('酒店') || t.includes('住宿') || poi.timeSlot === '到达' || poi.timeSlot === '出发' || poi.timeSlot === '返回') {
+        continue;
       } else if (t.includes('餐厅') || t.includes('美食') || t.includes('小吃') || t.includes('咖啡') || t.includes('茶')) {
         food += c;
       } else if (t.includes('景点') || t.includes('公园') || t.includes('风景') || t.includes('博物馆')) {

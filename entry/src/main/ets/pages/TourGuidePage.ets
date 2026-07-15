@@ -63,6 +63,8 @@ export struct TourGuideContent {
   private markerPoiMap: Record<string, PoiResult> = {};
   private lastThemeDark: boolean = false;
   private themePoller: number | null = null;
+  /** 防并发：重复调用 drawPlanOnMap 时丢弃旧的异步路线计算结果 */
+  private drawGeneration: number = 0;
 
   async aboutToAppear(): Promise<void> {
     // 从内存恢复
@@ -84,6 +86,11 @@ export struct TourGuideContent {
           g_planState.messages = this.chatMessages;
         }
       } catch (_e) { /* ignore */ }
+    }
+
+    // 同步恢复的计划到 agent，防止 agent/UI 两套 plan 不同步导致预算丢失
+    if (this.plan) {
+      this.agent.setPlan(JSON.parse(JSON.stringify(this.plan)) as TourPlan);
     }
 
     // 加载用户偏好到"小途"agent（软引导，不强制）
@@ -134,7 +141,7 @@ export struct TourGuideContent {
     // 持久化到数据库，杀进程后也能恢复
     try {
       const dao = Dao.getInstance();
-      if (this.plan && this.plan.dailyPlans.length > 0) {
+      if (this.plan && (this.plan.dailyPlans.length > 0 || (this.plan.totalBudget && this.plan.totalBudget > 0))) {
         dao.upsertUserProfile('tour_plan', JSON.stringify(this.plan), 1);
       }
       if (this.chatMessages.length > 0) {
@@ -211,6 +218,10 @@ export struct TourGuideContent {
     } finally {
       this.saveState();
       this.isAiThinking = false;
+      // 强制每次对话后重绘地图，确保地图始终反映当前 plan
+      if (this.plan && this.plan.dailyPlans.length > 0 && this.isMapReady && this.mapService) {
+        await this.drawPlanOnMap(this.plan);
+      }
     }
   }
 
@@ -248,11 +259,14 @@ export struct TourGuideContent {
       const resp: AgentResponse = await this.agent.executeToolAndContinue(toolCall.action, params);
 
       // 立即更新地图 — 不等 AI 回复
-      if (resp.plan && resp.plan.dailyPlans.length > 0) {
+      // set_budget 即使无 dailyPlans 也更新 state（确保预算持久化）
+      if (resp.plan && (resp.plan.dailyPlans.length > 0 || toolCall.action === 'set_budget')) {
         this.plan = resp.plan;
         this.saveState();
-        this.clearCurrentMarkers();
-        this.drawPlanOnMap(resp.plan);
+        if (resp.plan.dailyPlans.length > 0) {
+          this.clearCurrentMarkers();
+          await this.drawPlanOnMap(resp.plan);
+        }
       }
       if (this.isMapReady && this.mapService) {
         if (resp.mapCenter) {
@@ -281,6 +295,11 @@ export struct TourGuideContent {
           if (last.content.includes('🔍')) {
             this.chatMessages = this.chatMessages.slice(0, -1);
           }
+        }
+        // 对于信息性工具，显示工具执行结果（预算概览等）
+        const infoActions: string[] = ['estimate_costs', 'set_budget'];
+        if (infoActions.indexOf(toolCall.action) >= 0 && resp.text && resp.text.length > 0) {
+          this.chatMessages.push({ role: 'ai', content: resp.text });
         }
         // 如果有意义的回复才添加，否则保留 Phase 1 的结果
         if (aiResp.text && aiResp.text.length > 2 && aiResp.text !== '收到，请继续。') {
@@ -499,6 +518,9 @@ export struct TourGuideContent {
     const ms = this.mapService;
     if (!ms || !this.isMapReady) return;
 
+    // 防并发：递增代数，旧调用的异步路线结果将被丢弃
+    const gen: number = ++this.drawGeneration;
+
     // 清除旧路线
     this.clearPlanOverlays();
 
@@ -599,6 +621,8 @@ export struct TourGuideContent {
         }
       }
       if (allPts.length > 0) {
+        // 防并发：如果已有更新的 drawPlanOnMap 调用，丢弃本次异步结果
+        if (gen !== this.drawGeneration) return;
         day.route = { distance: 0, duration: 0, path: allPts, steps: [], origin: '', destination: '' } as NavRoute;
         if (this.dayPolylines[d] && this.dayPolylines[d].length > 0) {
           try { ms.removePolyline(this.dayPolylines[d]); } catch (_e) { /* ignore */ }
@@ -808,7 +832,7 @@ export struct TourGuideContent {
           }
           .width('90%').padding(8)
           .backgroundColor('#CCFFFFFF').borderRadius(12)
-          .position({ x: '5%', y: 40 }).zIndex(9)
+          .position({ x: '5%', y: this.calcItineraryY() }).zIndex(9)
         }
 
         // POI 详情弹窗

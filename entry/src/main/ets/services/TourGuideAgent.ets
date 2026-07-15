@@ -88,7 +88,14 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
 - 推荐酒店/餐厅时考虑预算（预算<3000推经济型、3000-8000推舒适型、>8000推豪华型）
 - 酒店推荐时附带价格区间，如"¥200-400/晚"
 - estimate_costs 估算规则：酒店≈300/晚、正餐≈80/人、景点≈60/人、跨城交通按实际
-- 估算完成后明确告知用户预算是否够用，不够就说"⚠️可能超预算，建议减少XX或选择经济型"`;
+- 估算完成后明确告知用户预算是否够用，不够就说"⚠️可能超预算，建议减少XX或选择经济型"
+
+## 本地人模式（用户常住城市 = 目的地城市）
+- 用户就在本地，不需要跨城交通！不要问"哪天出发""从哪个城市出发""怎么回来"
+- 不要主动推荐酒店（用户有房住），除非用户明确说想住酒店
+- 专注于推荐景点、美食、购物、本地体验
+- 预算不含酒店和跨城交通：estimate_costs 时跳过这两项
+- 不要说"返程""回去"之类的话，用户就在本地`;
 
 export interface ToolCall {
   action: string;
@@ -147,6 +154,8 @@ export class TourGuideAgent {
   private toolCallCount: number;
   /** 用户偏好上下文（软件引导，不强制） */
   private userPrefContext: string = '';
+  /** 用户常住城市，用于判断本地人模式 */
+  private userCity: string = '';
 
   constructor() {
     this.claude = new ClaudeService();
@@ -165,6 +174,11 @@ export class TourGuideAgent {
     return this.plan;
   }
 
+  /** 从外部同步计划数据（UI恢复持久化数据后调用，防止agent/UI两套plan不同步） */
+  setPlan(plan: TourPlan): void {
+    this.plan = plan;
+  }
+
   /**
    * 设置用户偏好上下文（软件引导，不强制限制推荐）
    * @param userName 用户名
@@ -172,6 +186,7 @@ export class TourGuideAgent {
    * @param preferences 偏好标签数组
    */
   setUserContext(userName: string, userCity: string, preferences: string[]): void {
+    this.userCity = userCity || '';
     const parts: string[] = [];
     if (userName) parts.push(`用户叫${userName}`);
     if (userCity) parts.push(`常住${userCity}`);
@@ -185,6 +200,17 @@ export class TourGuideAgent {
     } else {
       this.userPrefContext = '';
     }
+  }
+
+  /** 获取用户常住城市 */
+  getUserCity(): string {
+    return this.userCity;
+  }
+
+  /** 判断当前计划是否为本地游（目的地 = 用户常住城市） */
+  private isLocalTrip(): boolean {
+    if (!this.userCity || !this.plan.city) return false;
+    return this.plan.city.includes(this.userCity) || this.userCity.includes(this.plan.city);
   }
 
   /** 获取完整的系统提示（含用户偏好） */
@@ -218,7 +244,14 @@ export class TourGuideAgent {
   /** 检测修改已有计划的意图，返回确定性工具调用（不依赖 AI 选择） */
   private detectModificationIntent(input: string): ToolCall | undefined {
     // ── 预算设置（无计划时也可用） ──
-    const budgetPattern = /(?:预算|花费|花销|费用)\s*(\d+)\s*(?:元|块|万)?/;
+    // 优先匹配"改成/改为"等变更关键词后的新数字
+    const budgetChangePattern = /(?:预算|花费|花销|费用).*?(?:改成|改为|换成|调整为|变成|变到|改到|降到|提到|调到|设为|设成)[^\d]{0,5}(\d+)\s*(?:元|块|万)?/;
+    const budgetChangeMatch: RegExpMatchArray | null = input.match(budgetChangePattern);
+    if (budgetChangeMatch) {
+      return { action: 'set_budget', amount: budgetChangeMatch[1] };
+    }
+    // 回退：简单的"预算5000"模式（[^\d]{0,5}允许"是/大概/大约"等中间词）
+    const budgetPattern = /(?:预算|花费|花销|费用)[^\d]{0,5}(\d+)\s*(?:元|块|万)?/;
     const budgetMatch: RegExpMatchArray | null = input.match(budgetPattern);
     if (budgetMatch) {
       return { action: 'set_budget', amount: budgetMatch[1] };
@@ -411,7 +444,8 @@ export class TourGuideAgent {
 
     // 确定性修改意图检测：绕过 AI 工具选择，直接准备工具调用
     const modIntent: ToolCall | undefined = this.detectModificationIntent(input);
-    if (modIntent && this.plan.dailyPlans.length > 0) {
+    // set_budget 无需 dailyPlans 即可执行；其他操作需要已有计划
+    if (modIntent && (modIntent.action === 'set_budget' || this.plan.dailyPlans.length > 0)) {
       Logger.info(TAG, 'Modification intent detected: %{public}s', modIntent.action);
       // 仍然发送给 AI 获取对话文本
       const userMsg: string = '用户: ' + input;
@@ -654,6 +688,15 @@ export class TourGuideAgent {
         while (this.plan.dailyPlans.length < this.plan.days) {
           const nd: number = this.plan.dailyPlans.length;
           let basePois: TourPoiItem[] = [];
+          // 非本地人第一天：从到达城市中心出发（火车站/机场 → 酒店 → 景点）
+          if (nd === 0 && !this.isLocalTrip() && this.plan.transportToCity && this.plan.cityLat !== 0) {
+            const transportLabel: string = getTransportLabel(this.plan.transportToCity.type);
+            basePois.push({
+              name: `到达${this.plan.city}（${transportLabel}）`,
+              lat: this.plan.cityLat, lng: this.plan.cityLng,
+              type: '交通到达', timeSlot: '到达', duration: '', note: ''
+            });
+          }
           if (this.plan.hotel) {
             basePois.push(
               { name: this.plan.hotel.name, lat: this.plan.hotel.lat, lng: this.plan.hotel.lng, type: '酒店住宿', timeSlot: '出发', duration: '', note: '' },
@@ -709,19 +752,22 @@ export class TourGuideAgent {
           resultText = '还没设置预算哦！请先告诉我预算是多少，比如"预算5000元"。';
           break;
         }
-        // 估算各 POI 花费
+        // 估算各 POI 花费（始终重新估算，确保校准生效）
         for (const day of this.plan.dailyPlans) {
           for (const poi of day.pois) {
-            if (poi.estimatedCost && poi.estimatedCost > 0) continue; // 已有值则不覆盖
+            // 跳过起终点标记（出发/返回/入住），这些不是实际消费项
+            if (poi.timeSlot === '出发' || poi.timeSlot === '返回' || poi.timeSlot === '入住' || poi.timeSlot === '到达') continue;
             const t: string = poi.type || '';
             if (t.includes('酒店') || t.includes('住宿')) {
-              poi.estimatedCost = this.plan.days > 0 ? Math.round(this.plan.hotel ? 300 : 200) : 300;
+              // 本地人不需要酒店花费
+              poi.estimatedCost = this.isLocalTrip() ? 0 : (this.plan.days > 0 ? Math.round(this.plan.hotel ? 300 : 200) : 300);
             } else if (t.includes('餐厅') || t.includes('美食') || t.includes('小吃') || t.includes('咖啡')) {
               poi.estimatedCost = 80;
             } else if (poi.timeSlot.includes('餐')) {
               poi.estimatedCost = 80;
             } else if (t.includes('交通') || t.includes('飞机') || t.includes('高铁') || t.includes('火车')) {
-              poi.estimatedCost = t.includes('飞机') ? 800 : (t.includes('高铁') ? 500 : 200);
+              // 本地人不需要跨城交通花费
+              poi.estimatedCost = this.isLocalTrip() ? 0 : (t.includes('飞机') ? 800 : (t.includes('高铁') ? 500 : 200));
             } else if (t.includes('景点') || t.includes('公园') || t.includes('风景') || t.includes('博物馆')) {
               poi.estimatedCost = 60;
             } else if (t.includes('购物') || t.includes('商场')) {
@@ -729,18 +775,29 @@ export class TourGuideAgent {
             }
           }
         }
-        // 估算跨城交通
-        if (this.plan.transportToCity && (!this.plan.transportToCity.cost || this.plan.transportToCity.cost === 0)) {
-          const tt: string = this.plan.transportToCity.type;
-          this.plan.transportToCity.cost = tt === 'flight' ? 800 : (tt === 'high_speed_rail' ? 500 : (tt === 'train' ? 200 : 100));
-        }
-        if (this.plan.transportBack && (!this.plan.transportBack.cost || this.plan.transportBack.cost === 0)) {
-          const tb: string = this.plan.transportBack.type;
-          this.plan.transportBack.cost = tb === 'flight' ? 800 : (tb === 'high_speed_rail' ? 500 : (tb === 'train' ? 200 : 100));
-        }
-        // 估算酒店总花费
-        if (this.plan.hotel && (!this.plan.hotel.estimatedCost || this.plan.hotel.estimatedCost === 0)) {
-          this.plan.hotel.estimatedCost = this.plan.days * 300;
+        // 估算跨城交通（保留真实API价格，仅无数据时用硬编码兜底；本地人跳过）
+        if (!this.isLocalTrip()) {
+          if (this.plan.transportToCity) {
+            if (!this.plan.transportToCity.cost || this.plan.transportToCity.cost <= 0) {
+              const tt: string = this.plan.transportToCity.type;
+              this.plan.transportToCity.cost = tt === 'flight' ? 800 : (tt === 'high_speed_rail' ? 500 : (tt === 'train' ? 200 : 100));
+            }
+          }
+          if (this.plan.transportBack) {
+            if (!this.plan.transportBack.cost || this.plan.transportBack.cost <= 0) {
+              const tb: string = this.plan.transportBack.type;
+              this.plan.transportBack.cost = tb === 'flight' ? 800 : (tb === 'high_speed_rail' ? 500 : (tb === 'train' ? 200 : 100));
+            }
+          }
+          // 估算酒店总花费（本地人跳过）
+          if (this.plan.hotel) {
+            this.plan.hotel.estimatedCost = this.plan.days * 300;
+          }
+        } else {
+          // 本地人：清除交通和酒店花费
+          if (this.plan.transportToCity) this.plan.transportToCity.cost = 0;
+          if (this.plan.transportBack) this.plan.transportBack.cost = 0;
+          if (this.plan.hotel) this.plan.hotel.estimatedCost = 0;
         }
         const br = getBudgetBreakdown(this.plan);
         const totalBudget: number = this.plan.totalBudget ?? 0;
@@ -757,7 +814,7 @@ export class TourGuideAgent {
         break;
       }
       case 'search_transport': {
-        // AI 直接用训练知识生成车次列表（比API更全）
+        // 先调高德 API 获取真实跨城交通数据，AI 仅作兜底
         const stFrom: string = params['from'] ?? '';
         const stTo: string = params['to'] ?? '';
         const stDate: string = params['date'] ?? '';
@@ -766,27 +823,24 @@ export class TourGuideAgent {
           break;
         }
 
-        const dateLabel: string = stDate ? stDate : '最近';
-        // 让 AI 生成结构化交通数据
-        const prompt: string =
-          `用户要从${stFrom}到${stTo}，日期${dateLabel}。` +
-          `请列出你知道的${stFrom}到${stTo}之间的高铁(G)、动车(D)、普通火车(K/T/Z)方案。` +
-          `每个方案给出：车次、出发站、到达站、出发时间、到达时间、大约时长(小时)、大约票价(元)。` +
-          `最后用JSON格式总结（只输出JSON，不要其他文字）：\n` +
-          `{"action":"show_transport","trains":[{"trip":"G89","type":"high_speed_rail","fromStation":"北京西","toStation":"成都东","departureTime":"08:00","arrivalTime":"16:30","durationHours":8.5,"price":780}]}`;
-        const reply: ClaudeReply = await this.claude.chatConversation(prompt, SYSTEM_PROMPT);
-        const aiText: string = reply.text || '';
-        // 解析 AI 输出的 JSON
-        const trains = this.parseTrainsFromAi(aiText, stFrom, stTo);
-        if (trains.length > 0) {
-          transportOptions = trains;
-          resultText = `${stFrom}→${stTo}${stDate ? '（' + stDate + '）' : ''}共${trains.length}个方案：`;
-        } else {
-          // AI 没返回JSON，尝试高德兜底
-          const options = await AmapSearchService.getInstance().searchIntercityTransport(stFrom, stTo, stDate || undefined);
+        // 1. 优先使用高德 API 真实数据
+        const options = await AmapSearchService.getInstance().searchIntercityTransport(stFrom, stTo, stDate || undefined);
+        if (options.length > 0) {
           transportOptions = options;
-          if (options.length > 0) {
-            resultText = `查到${stFrom}→${stTo}共${options.length}个方案（高德路线推荐）：`;
+          // 将真实方案详情写入 resultText，AI 对话时可引用而非胡编
+          const detailsStr: string = options.slice(0, 8).map((o, i) =>
+            `${i + 1}. ${getTransportEmoji(o.type)} ${o.trip || getTransportLabel(o.type)} ${o.fromStation}${o.departureTime ? ' ' + o.departureTime : ''}→${o.toStation}${o.arrivalTime ? ' ' + o.arrivalTime : ''}${o.price > 0 ? ' ¥' + o.price : ''}`
+          ).join('\n');
+          resultText = `${stFrom}→${stTo}${stDate ? '（' + stDate + '）' : ''}查到${options.length}个真实方案：\n${detailsStr}`;
+        } else {
+          // 2. API 无结果 → AI 兜底（明确标注数据来源不可靠）
+          const aiTrains = await this.generateTransportWithAI(stFrom, stTo, stDate);
+          if (aiTrains.length > 0) {
+            transportOptions = aiTrains;
+            const aiDetailsStr: string = aiTrains.slice(0, 8).map((o, i) =>
+              `${i + 1}. ${getTransportEmoji(o.type)} ${o.trip || getTransportLabel(o.type)} ${o.fromStation}${o.departureTime ? ' ' + o.departureTime : ''}→${o.toStation}${o.arrivalTime ? ' ' + o.arrivalTime : ''}${o.price > 0 ? ' ¥' + o.price : ''}`
+            ).join('\n');
+            resultText = `⚠️ ${stFrom}→${stTo}${stDate ? '（' + stDate + '）' : ''}未查到实时方案，以下为AI估算（仅供参考，票价和时刻以官方为准）：\n${aiDetailsStr}`;
           } else {
             resultText = `未查到${stFrom}到${stTo}的方案，请换个说法试试。`;
           }
@@ -944,10 +998,14 @@ export class TourGuideAgent {
       resp.toolCall = { action: 'estimate_costs' };
     }
 
+    // set_budget 始终返回计划（即使无 dailyPlans），确保预算值传播到页面
+    if (action === 'set_budget') {
+      resp.plan = JSON.parse(JSON.stringify(this.plan)) as TourPlan;
+    }
     // 修改计划的操作返回深拷贝计划
     if (this.plan.dailyPlans.length > 0 &&
         (action === 'make_plan' || action === 'add_poi_to_day' || action === 'remove_poi_from_day' ||
-         action === 'search_and_add' || action === 'set_budget' || action === 'estimate_costs')) {
+         action === 'search_and_add' || action === 'estimate_costs')) {
       resp.plan = JSON.parse(JSON.stringify(this.plan)) as TourPlan;
     }
     if (action === 'set_transport') {
@@ -959,9 +1017,15 @@ export class TourGuideAgent {
   /** 工具执行后向 AI 请求下一步（在 UI 更新之后调用，不阻塞地图刷新） */
   async askAiNextStep(action: string, resultText: string): Promise<AgentResponse> {
     let planCtx: string = `当前计划：城市=${this.plan.city}(${this.plan.cityLat.toFixed(2)},${this.plan.cityLng.toFixed(2)}) 酒店=${this.plan.hotel?.name || '未选'} 天数=${this.plan.days}`;
+    // 本地人模式标记：目的地 = 用户常住城市
+    if (this.isLocalTrip()) {
+      planCtx += ` [本地游：用户常住${this.userCity}，无需酒店和跨城交通]`;
+    }
     if (this.plan.totalBudget) planCtx += ` 总预算=¥${this.plan.totalBudget}`;
-    if (this.plan.transportToCity) planCtx += ` 到达交通=${getTransportLabel(this.plan.transportToCity.type)}${this.plan.transportToCity.from}→${this.plan.transportToCity.to}`;
-    if (this.plan.transportBack) planCtx += ` 返程交通=${getTransportLabel(this.plan.transportBack.type)}${this.plan.transportBack.from}→${this.plan.transportBack.to}`;
+    if (this.plan.transportToCity) planCtx += ` 到达交通=${getTransportLabel(this.plan.transportToCity.type)}${this.plan.transportToCity.from}→${this.plan.transportToCity.to}` +
+      (this.plan.transportToCity.cost && this.plan.transportToCity.cost > 0 ? ` ¥${this.plan.transportToCity.cost}` : '');
+    if (this.plan.transportBack) planCtx += ` 返程交通=${getTransportLabel(this.plan.transportBack.type)}${this.plan.transportBack.from}→${this.plan.transportBack.to}` +
+      (this.plan.transportBack.cost && this.plan.transportBack.cost > 0 ? ` ¥${this.plan.transportBack.cost}` : '');
     if (this.plan.dailyPlans.length > 0) {
       planCtx += '\n每日行程：';
       for (const d of this.plan.dailyPlans) {
@@ -969,13 +1033,13 @@ export class TourGuideAgent {
       }
     }
     const followMsg: string = `工具 ${action} 结果：\n${resultText}\n\n${planCtx}\n\n请基于此继续与用户对话。如果任务还没完成，继续下一步。如果搜索失败，换个关键词重试。`;
-    const reply: ClaudeReply = await this.claude.chatConversation(followMsg, SYSTEM_PROMPT);
+    const reply: ClaudeReply = await this.claude.chatConversation(followMsg, this.getSystemPrompt());
     const resultText2: string = reply.text || '收到，请继续。';
     let nextTool: ToolCall | undefined = this.parseToolCall(resultText2);
     // 如果没有工具调用且回复很短，重试一次
     if (!nextTool && resultText2.length < 20) {
       const retryReply: ClaudeReply = await this.claude.chatConversation(
-        '请继续完成任务，下一步做什么？', SYSTEM_PROMPT);
+        '请继续完成任务，下一步做什么？', this.getSystemPrompt());
       const retryText: string = retryReply.text || '';
       nextTool = this.parseToolCall(retryText);
       const resp: AgentResponse = { text: this.stripJson(retryText || resultText2), toolCall: nextTool };
@@ -1003,6 +1067,21 @@ export class TourGuideAgent {
       arr[i] = arr[j];
       arr[j] = tmp;
     }
+  }
+
+  /** AI 生成跨城交通方案（仅作兜底，数据不可靠，需标注"仅供参考"） */
+  private async generateTransportWithAI(fromCity: string, toCity: string, date?: string):
+    Promise<import('../services/map/AmapSearchService').IntercityTransportOption[]> {
+    const dateLabel: string = date ? date : '最近';
+    const prompt: string =
+      `用户要从${fromCity}到${toCity}，日期${dateLabel}。` +
+      `请列出你知道的${fromCity}到${toCity}之间的高铁(G)、动车(D)、普通火车(K/T/Z)方案。` +
+      `每个方案给出：车次、出发站、到达站、出发时间、到达时间、大约时长(小时)、大约票价(元)。` +
+      `最后用JSON格式总结（只输出JSON，不要其他文字）：\n` +
+      `{"action":"show_transport","trains":[{"trip":"G89","type":"high_speed_rail","fromStation":"北京西","toStation":"成都东","departureTime":"08:00","arrivalTime":"16:30","durationHours":8.5,"price":780}]}`;
+    const reply: ClaudeReply = await this.claude.chatConversation(prompt, SYSTEM_PROMPT);
+    const aiText: string = reply.text || '';
+    return this.parseTrainsFromAi(aiText, fromCity, toCity);
   }
 
   /** 根据两点距离自动选择交通方式（驾车最稳定，公交需用户明确要求） */
