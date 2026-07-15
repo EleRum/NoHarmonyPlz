@@ -473,6 +473,39 @@ export class AmapSearchService {
     return null;
   }
 
+  /** 地理编码具体地址（如火车站名、机场等），city 参数提高精度 */
+  async geocodeAddress(address: string, city?: string): Promise<LatLng | null> {
+    let url: string =
+      `https://restapi.amap.com/v3/geocode/geo?key=${AMAP_KEY}` +
+      `&address=${encodeURIComponent(address)}`;
+    if (city && city.length > 0) {
+      url += `&city=${encodeURIComponent(city)}`;
+    }
+
+    try {
+      const bridge: PlatformBridge = PlatformBridge.getInstance();
+      const resp = await bridge.network.request(url, { method: 'GET' });
+      if (resp.responseCode === 200 && resp.result) {
+        const json = JSON.parse(resp.result) as Record<string, Object>;
+        const statusStr: string = json['status'] as string ?? '0';
+        if (statusStr === '1') {
+          const geocodes: Object[] = (json['geocodes'] as Object[]) ?? [];
+          if (geocodes.length > 0) {
+            const geo = geocodes[0] as Record<string, Object>;
+            const locStr: string = (geo['location'] as string) ?? '';
+            const parts: string[] = locStr.split(',');
+            if (parts.length === 2) {
+              return { latitude: parseFloat(parts[1]), longitude: parseFloat(parts[0]) } as LatLng;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      Logger.warn(TAG, 'REST geocode address error');
+    }
+    return null;
+  }
+
   /**
    * 搜索酒店（REST API）
    */

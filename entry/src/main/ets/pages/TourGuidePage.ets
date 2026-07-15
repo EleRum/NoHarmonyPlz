@@ -255,6 +255,8 @@ export struct TourGuideContent {
       if (toolCall.mode) params['mode'] = toolCall.mode;
       if (toolCall.from) params['from'] = toolCall.from;
       if (toolCall.to) params['to'] = toolCall.to;
+      if (toolCall.fromStation) params['fromStation'] = toolCall.fromStation;
+      if (toolCall.toStation) params['toStation'] = toolCall.toStation;
       if (toolCall.departureTime) params['departureTime'] = toolCall.departureTime;
       if (toolCall.arrivalTime) params['arrivalTime'] = toolCall.arrivalTime;
       if (toolCall.number) params['number'] = toolCall.number;
@@ -476,6 +478,8 @@ export struct TourGuideContent {
       type: opt.type,
       from: opt.fromStation || '',
       to: opt.toStation || '',
+      fromStation: opt.fromStation || '',
+      toStation: opt.toStation || '',
       departureTime: opt.departureTime || '',
       arrivalTime: opt.arrivalTime || '',
       number: opt.trip || '',

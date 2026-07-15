@@ -87,7 +87,13 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
   {"action":"estimate_costs"}
 - 推荐酒店/餐厅时考虑预算（预算<3000推经济型、3000-8000推舒适型、>8000推豪华型）
 - 酒店推荐时附带价格区间，如"¥200-400/晚"
-- estimate_costs 估算规则：酒店≈300/晚、正餐≈80/人、景点≈60/人、跨城交通按实际
+- estimate_costs 估算规则（会根据城市自动调整）：
+  * 港澳：餐饮×3.5、酒店×3.5（如香港正餐≈280/人，酒店≈1050/晚）
+  * 一线（北上广深）：×1.4-1.5（正餐≈120/人，酒店≈450/晚）
+  * 新一线（成都杭州等）：×1.2（正餐≈95/人，酒店≈360/晚）
+  * 二线及以下：×1.0（正餐≈80/人，酒店≈300/晚）
+  * 跨城交通按实际票价
+- **绝不能用二线城市价格估算香港！** 香港吃一顿快餐也要50-80港币，正餐150-400港币
 - 估算完成后明确告知用户预算是否够用，不够就说"⚠️可能超预算，建议减少XX或选择经济型"
 
 ## 本地人模式（用户常住城市 = 目的地城市）
@@ -118,6 +124,8 @@ export interface ToolCall {
   // 跨城交通
   from?: string;
   to?: string;
+  fromStation?: string;
+  toStation?: string;
   departureTime?: string;
   arrivalTime?: string;
   number?: string;
@@ -205,6 +213,46 @@ export class TourGuideAgent {
   /** 获取用户常住城市 */
   getUserCity(): string {
     return this.userCity;
+  }
+
+  /** 城市消费水平分级 → 物价乘数 */
+  private static readonly CITY_COST_TIERS: Record<string, number> = {
+    // 港澳（超高消费）
+    '香港': 3.5, '澳门': 3.0,
+    // 一线城市
+    '北京': 1.5, '上海': 1.5, '广州': 1.4, '深圳': 1.4,
+    // 新一线 / 强二线
+    '成都': 1.2, '杭州': 1.3, '重庆': 1.1, '武汉': 1.1,
+    '西安': 1.1, '南京': 1.2, '苏州': 1.2, '天津': 1.2,
+    '长沙': 1.1, '青岛': 1.2, '厦门': 1.3, '大连': 1.2,
+    '郑州': 1.0, '济南': 1.0, '合肥': 1.0, '福州': 1.1,
+    '沈阳': 1.0, '哈尔滨': 1.0, '长春': 1.0,
+    // 旅游热门（中等偏上）
+    '三亚': 1.8, '丽江': 1.4, '大理': 1.3, '拉萨': 1.5,
+    '昆明': 1.1, '贵阳': 0.9, '南宁': 0.9, '海口': 1.2,
+    '乌鲁木齐': 1.2, '兰州': 0.9, '银川': 0.9, '西宁': 0.9,
+    '桂林': 1.1, '张家界': 1.2, '黄山': 1.2, '峨眉山': 1.1,
+    '洛阳': 0.9, '开封': 0.9, '秦皇岛': 1.1, '烟台': 1.0,
+    '威海': 1.0, '北海': 1.0, '呼和浩特': 1.0, '包头': 0.9,
+    '太原': 0.9, '石家庄': 0.9, '南昌': 1.0, '宁波': 1.1,
+    '温州': 1.1, '无锡': 1.1, '佛山': 1.1,
+    '东莞': 1.1, '珠海': 1.3, '惠州': 1.0, '中山': 1.0,
+  };
+
+  /** 根据城市名获取消费水平乘数 */
+  static getCityCostMultiplier(city: string): number {
+    if (!city) return 1.0;
+    // 精确匹配
+    if (TourGuideAgent.CITY_COST_TIERS[city]) {
+      return TourGuideAgent.CITY_COST_TIERS[city];
+    }
+    // 模糊匹配（城市名前缀）
+    for (const key of Object.keys(TourGuideAgent.CITY_COST_TIERS)) {
+      if (city.startsWith(key) || key.startsWith(city)) {
+        return TourGuideAgent.CITY_COST_TIERS[key];
+      }
+    }
+    return 1.0; // 默认
   }
 
   /** 判断当前计划是否为本地游（目的地 = 用户常住城市） */
@@ -610,12 +658,13 @@ export class TourGuideAgent {
           autoCost = parseInt(first.cost) || undefined;
         }
         if (!autoCost) {
-          if (poiType.includes('酒店') || poiType.includes('宾馆') || poiType.includes('民宿')) autoCost = 300;
-          else if (poiType.includes('餐厅') || poiType.includes('美食') || poiType.includes('小吃')) autoCost = 80;
-          else if (autoTimeSlot.includes('餐')) autoCost = 80;
-          else if (poiType.includes('购物') || poiType.includes('商场')) autoCost = 100;
-          else if (poiType.includes('景点') || poiType.includes('公园')) autoCost = 60;
-          else if (poiType.includes('咖啡') || poiType.includes('茶')) autoCost = 40;
+          const cm: number = TourGuideAgent.getCityCostMultiplier(this.plan.city);
+          if (poiType.includes('酒店') || poiType.includes('宾馆') || poiType.includes('民宿')) autoCost = Math.round(300 * cm);
+          else if (poiType.includes('餐厅') || poiType.includes('美食') || poiType.includes('小吃')) autoCost = Math.round(80 * cm);
+          else if (autoTimeSlot.includes('餐')) autoCost = Math.round(80 * cm);
+          else if (poiType.includes('购物') || poiType.includes('商场')) autoCost = Math.round(100 * cm);
+          else if (poiType.includes('景点') || poiType.includes('公园')) autoCost = Math.round(60 * cm);
+          else if (poiType.includes('咖啡') || poiType.includes('茶')) autoCost = Math.round(40 * cm);
         }
 
         const newPoi: TourPoiItem = {
@@ -688,12 +737,17 @@ export class TourGuideAgent {
         while (this.plan.dailyPlans.length < this.plan.days) {
           const nd: number = this.plan.dailyPlans.length;
           let basePois: TourPoiItem[] = [];
-          // 非本地人第一天：从到达城市中心出发（火车站/机场 → 酒店 → 景点）
+          // 非本地人第一天：从到达站（火车站/机场）出发，优先用车站在线坐标
           if (nd === 0 && !this.isLocalTrip() && this.plan.transportToCity && this.plan.cityLat !== 0) {
             const transportLabel: string = getTransportLabel(this.plan.transportToCity.type);
+            const stationName: string = this.plan.transportToCity.toStation ||
+              this.plan.transportToCity.number || transportLabel;
+            // 优先使用车站 geocode 坐标，兜底用城市中心
+            const arrLat: number = this.plan.transportToCity.stationLat ?? this.plan.cityLat;
+            const arrLng: number = this.plan.transportToCity.stationLng ?? this.plan.cityLng;
             basePois.push({
-              name: `到达${this.plan.city}（${transportLabel}）`,
-              lat: this.plan.cityLat, lng: this.plan.cityLng,
+              name: `到达${stationName}`,
+              lat: arrLat, lng: arrLng,
               type: '交通到达', timeSlot: '到达', duration: '', note: ''
             });
           }
@@ -752,6 +806,8 @@ export class TourGuideAgent {
           resultText = '还没设置预算哦！请先告诉我预算是多少，比如"预算5000元"。';
           break;
         }
+        // 城市物价系数
+        const costMul: number = TourGuideAgent.getCityCostMultiplier(this.plan.city);
         // 估算各 POI 花费（始终重新估算，确保校准生效）
         for (const day of this.plan.dailyPlans) {
           for (const poi of day.pois) {
@@ -760,18 +816,18 @@ export class TourGuideAgent {
             const t: string = poi.type || '';
             if (t.includes('酒店') || t.includes('住宿')) {
               // 本地人不需要酒店花费
-              poi.estimatedCost = this.isLocalTrip() ? 0 : (this.plan.days > 0 ? Math.round(this.plan.hotel ? 300 : 200) : 300);
+              poi.estimatedCost = this.isLocalTrip() ? 0 : Math.round((this.plan.hotel ? 300 : 200) * costMul);
             } else if (t.includes('餐厅') || t.includes('美食') || t.includes('小吃') || t.includes('咖啡')) {
-              poi.estimatedCost = 80;
+              poi.estimatedCost = Math.round(80 * costMul);
             } else if (poi.timeSlot.includes('餐')) {
-              poi.estimatedCost = 80;
+              poi.estimatedCost = Math.round(80 * costMul);
             } else if (t.includes('交通') || t.includes('飞机') || t.includes('高铁') || t.includes('火车')) {
               // 本地人不需要跨城交通花费
-              poi.estimatedCost = this.isLocalTrip() ? 0 : (t.includes('飞机') ? 800 : (t.includes('高铁') ? 500 : 200));
+              poi.estimatedCost = this.isLocalTrip() ? 0 : Math.round((t.includes('飞机') ? 800 : (t.includes('高铁') ? 500 : 200)) * costMul);
             } else if (t.includes('景点') || t.includes('公园') || t.includes('风景') || t.includes('博物馆')) {
-              poi.estimatedCost = 60;
+              poi.estimatedCost = Math.round(60 * costMul);
             } else if (t.includes('购物') || t.includes('商场')) {
-              poi.estimatedCost = 100;
+              poi.estimatedCost = Math.round(100 * costMul);
             }
           }
         }
@@ -791,7 +847,7 @@ export class TourGuideAgent {
           }
           // 估算酒店总花费（本地人跳过）
           if (this.plan.hotel) {
-            this.plan.hotel.estimatedCost = this.plan.days * 300;
+            this.plan.hotel.estimatedCost = Math.round(this.plan.days * 300 * costMul);
           }
         } else {
           // 本地人：清除交通和酒店花费
@@ -802,6 +858,9 @@ export class TourGuideAgent {
         const br = getBudgetBreakdown(this.plan);
         const totalBudget: number = this.plan.totalBudget ?? 0;
         const over: boolean = br.total > totalBudget;
+        const cityNote: string = costMul > 1.3
+          ? `\n\n📌 ${this.plan.city}消费水平较高（×${costMul.toFixed(1)}），以上为当地参考价。`
+          : (costMul < 0.95 ? `\n\n📌 ${this.plan.city}消费水平较低，性价比不错！` : '');
         resultText = `📊 预算概览（总预算 ¥${totalBudget}）\n` +
           `🏨 住宿: ¥${br.hotel}\n` +
           `🍽️ 餐饮: ¥${br.food}\n` +
@@ -810,7 +869,8 @@ export class TourGuideAgent {
           `${br.shopping > 0 ? '🛍️ 购物: ¥' + br.shopping + '\n' : ''}` +
           `💰 预估总计: ¥${br.total}` +
           (over ? `\n\n⚠️ 超出预算 ¥${br.total - totalBudget}！建议减少部分项目或选择经济型选项。` :
-           `\n\n✅ 预算内，还剩 ¥${totalBudget - br.total}。`);
+           `\n\n✅ 预算内，还剩 ¥${totalBudget - br.total}。`) +
+          cityNote;
         break;
       }
       case 'search_transport': {
@@ -852,6 +912,8 @@ export class TourGuideAgent {
         const tType: string = params['type'] ?? '';
         const tFrom: string = params['from'] ?? '';
         const tTo: string = params['to'] ?? '';
+        const tFromStation: string = params['fromStation'] ?? '';
+        const tToStation: string = params['toStation'] ?? '';
         const tDep: string = params['departureTime'] ?? '';
         const tArr: string = params['arrivalTime'] ?? '';
         const tNum: string = params['number'] ?? '';
@@ -860,8 +922,26 @@ export class TourGuideAgent {
           resultText = '请提供交通方式、出发城市和到达城市。';
           break;
         }
+        // 尝试对到达站做 geocode，拿到车站真实坐标
+        let stationLat: number | undefined = undefined;
+        let stationLng: number | undefined = undefined;
+        if (tToStation) {
+          try {
+            const stationLoc: LatLng | null = await AmapSearchService.getInstance().geocodeAddress(tToStation, tTo);
+            if (stationLoc) {
+              stationLat = stationLoc.latitude;
+              stationLng = stationLoc.longitude;
+              Logger.info(TAG, 'Station geocoded: %{public}s → (%{public}.4f, %{public}.4f)',
+                tToStation, stationLat, stationLng);
+            }
+          } catch (_e) { /* ignore */ }
+        }
         const transport: InterCityTransport = {
           type: tType, from: tFrom, to: tTo,
+          fromStation: tFromStation || undefined,
+          toStation: tToStation || undefined,
+          stationLat: stationLat,
+          stationLng: stationLng,
           departureTime: tDep || undefined,
           arrivalTime: tArr || undefined,
           number: tNum || undefined,
@@ -1300,6 +1380,8 @@ export class TourGuideAgent {
         // 跨城交通
         if (obj['from']) tc.from = obj['from'];
         if (obj['to']) tc.to = obj['to'];
+        if (obj['fromStation']) tc.fromStation = obj['fromStation'];
+        if (obj['toStation']) tc.toStation = obj['toStation'];
         if (obj['departureTime']) tc.departureTime = obj['departureTime'];
         if (obj['arrivalTime']) tc.arrivalTime = obj['arrivalTime'];
         if (obj['number']) tc.number = obj['number'];

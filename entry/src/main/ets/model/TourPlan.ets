@@ -17,6 +17,10 @@ export interface InterCityTransport {
   type: string;               // train / high_speed_rail / flight / bus
   from: string;               // 出发城市
   to: string;                 // 到达城市
+  fromStation?: string;       // 出发站名 "北京西站"
+  toStation?: string;         // 到达站名 "成都东站"
+  stationLat?: number;        // 到达站纬度
+  stationLng?: number;        // 到达站经度
   departureTime?: string;     // "7月15日 08:30"
   arrivalTime?: string;       // "7月15日 11:45"
   number?: string;            // 车次/航班号 "G123"/"CA1234"
