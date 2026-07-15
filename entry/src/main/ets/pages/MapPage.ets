@@ -123,6 +123,9 @@ export struct MapPage {
     { role: 'ai', content: '你好！我是足迹助手，可以帮你修正活动类型、查询数据。试试说"帮助"。' }
   ];
   @State isAiThinking: boolean = false;
+  @State chatScrollHeight: number = 200;
+  private chatDragStartH: number = 0;
+  private chatScroller: Scroller = new Scroller();
   @State timelineRefreshKey: number = 0;
   // ─── 导航状态 ───
   @State showNavigation: boolean = false;
@@ -1116,6 +1119,7 @@ export struct MapPage {
     if (msg.length === 0) return;
     this.chatMessages.push({ role: 'user', content: msg });
     this.chatInput = '';
+    this.chatScroller.scrollEdge(Edge.Bottom);
 
     this.isAiThinking = true;
     this.syncAgentContext();
@@ -1123,6 +1127,7 @@ export struct MapPage {
     this.isAiThinking = false;
 
     this.chatMessages.push({ role: 'ai', content: reply.text });
+    this.chatScroller.scrollEdge(Edge.Bottom);
 
     if (reply.action === 'refresh_timeline') {
       this.triggerClassify();
@@ -1751,9 +1756,42 @@ export struct MapPage {
                   Blank()
                   Text('✕').fontSize(18).fontColor(getTheme(this.themeMode).textSecondary)
                     .onClick(() => { this.showChat = false; })
-                }.width('100%').margin({ bottom: 8 })
+                }.width('100%').margin({ bottom: 4 })
+                .gesture(
+                  PanGesture({ fingers: 1, direction: PanDirection.Vertical, distance: 3 })
+                    .onActionStart(() => {
+                      this.chatDragStartH = this.chatScrollHeight;
+                    })
+                    .onActionUpdate((event: GestureEvent) => {
+                      const newH: number = this.chatDragStartH - event.offsetY;
+                      this.chatScrollHeight = Math.max(100, Math.min(400, newH));
+                    })
+                    .onActionEnd(() => {
+                      this.chatScrollHeight = Math.max(100, Math.min(400, this.chatScrollHeight));
+                    })
+                )
 
-                Scroll() {
+                // 拖拽手柄（按住上下拖动调整聊天框高度）
+                Row()
+                  .width(36).height(5).borderRadius(2.5)
+                  .backgroundColor('#C0C0C0')
+                  .alignSelf(ItemAlign.Center)
+                  .margin({ bottom: 6 })
+                  .gesture(
+                    PanGesture({ fingers: 1, direction: PanDirection.Vertical, distance: 3 })
+                      .onActionStart(() => {
+                        this.chatDragStartH = this.chatScrollHeight;
+                      })
+                      .onActionUpdate((event: GestureEvent) => {
+                        const newH: number = this.chatDragStartH - event.offsetY;
+                        this.chatScrollHeight = Math.max(100, Math.min(400, newH));
+                      })
+                      .onActionEnd(() => {
+                        this.chatScrollHeight = Math.max(100, Math.min(400, this.chatScrollHeight));
+                      })
+                  )
+
+                Scroll(this.chatScroller) {
                   Column() {
                     ForEach(this.chatMessages, (bubble: ChatBubble) => {
                       Row() {
@@ -1794,7 +1832,7 @@ export struct MapPage {
                       .margin({ bottom: 4 })
                     }
                   }
-                }.height(200).margin({ bottom: 8 })
+                }.height(this.chatScrollHeight).margin({ bottom: 8 })
 
                 Row() {
                   TextInput({ placeholder: '输入指令...', text: this.chatInput })

@@ -56,6 +56,9 @@ export struct TourGuideContent {
   @State poiDetailInfo: string = '';
   @State quickReplies: string[] = [];
   @State transportOptions: IntercityTransportOption[] = [];
+  @State chatScrollHeight: number = 160;
+  private chatDragStartH: number = 0;
+  private chatScroller: Scroller = new Scroller();
   private quickReplyPoiData: PoiResult[] = [];
   private dayPolylines: string[] = [];
   private dayMarkers: string[][] = [];
@@ -186,6 +189,7 @@ export struct TourGuideContent {
 
     this.chatMessages.push({ role: 'user', content: input });
     this.chatInput = '';
+    this.chatScroller.scrollEdge(Edge.Bottom);
     this.quickReplies = [];
     this.saveState();
     this.isAiThinking = true;
@@ -198,9 +202,11 @@ export struct TourGuideContent {
           role: 'ai',
           content: resp.text + '\n\n🔍 正在查找...'
         });
+        this.chatScroller.scrollEdge(Edge.Bottom);
         await this.autoExecuteTool(resp.toolCall);
       } else {
         this.chatMessages.push({ role: 'ai', content: resp.text });
+        this.chatScroller.scrollEdge(Edge.Bottom);
         if (resp.plan) {
           this.plan = resp.plan;
           this.drawPlanOnMap(resp.plan);
@@ -215,6 +221,7 @@ export struct TourGuideContent {
         }
       }
       this.chatMessages.push({ role: 'ai', content: '抱歉，出错了。请再试一次。' });
+      this.chatScroller.scrollEdge(Edge.Bottom);
     } finally {
       this.saveState();
       this.isAiThinking = false;
@@ -300,10 +307,12 @@ export struct TourGuideContent {
         const infoActions: string[] = ['estimate_costs', 'set_budget'];
         if (infoActions.indexOf(toolCall.action) >= 0 && resp.text && resp.text.length > 0) {
           this.chatMessages.push({ role: 'ai', content: resp.text });
+          this.chatScroller.scrollEdge(Edge.Bottom);
         }
         // 如果有意义的回复才添加，否则保留 Phase 1 的结果
         if (aiResp.text && aiResp.text.length > 2 && aiResp.text !== '收到，请继续。') {
           this.chatMessages.push({ role: 'ai', content: aiResp.text });
+          this.chatScroller.scrollEdge(Edge.Bottom);
         }
         this.saveState();
 
@@ -313,6 +322,7 @@ export struct TourGuideContent {
           nextTool?.action || 'null', resp.toolCall?.action || 'null', chainTool?.action || 'null');
         if (chainTool) {
           this.chatMessages.push({ role: 'ai', content: '🔍 ' + chainTool.action + '...' });
+          this.chatScroller.scrollEdge(Edge.Bottom);
           await this.autoExecuteTool(chainTool);
         }
       } catch (_e) {
@@ -336,6 +346,7 @@ export struct TourGuideContent {
         }
       }
       this.chatMessages.push({ role: 'ai', content: '😅 ' + toolCall.action + '执行出错，请再试一次。' });
+      this.chatScroller.scrollEdge(Edge.Bottom);
     }
   }
 
@@ -473,11 +484,13 @@ export struct TourGuideContent {
     // 显示确认消息
     const confirmText: string = `已选择 ${getTransportEmoji(opt.type)} ${opt.trip || label} ${opt.fromStation}${opt.departureTime ? ' ' + opt.departureTime : ''} → ${opt.toStation}${opt.arrivalTime ? ' ' + opt.arrivalTime : ''}${opt.price > 0 ? ' ¥' + opt.price : ''}`;
     this.chatMessages.push({ role: 'user', content: confirmText });
+    this.chatScroller.scrollEdge(Edge.Bottom);
     this.isAiThinking = true;
     try {
       await this.autoExecuteTool(toolCall);
     } catch (_e) {
       this.chatMessages.push({ role: 'ai', content: '记录交通方案失败，请重试。' });
+      this.chatScroller.scrollEdge(Edge.Bottom);
     } finally {
       this.isAiThinking = false;
     }
@@ -695,14 +708,6 @@ export struct TourGuideContent {
     return (Math.round(seconds / 3600 * 10) / 10).toFixed(1);
   }
 
-  /** 计算行程卡片的 Y 偏移（避开上方交通信息/预算条） */
-  private calcItineraryY(): number {
-    let y: number = 40;
-    if (this.plan && (this.plan.transportToCity || this.plan.transportBack)) y += 32;
-    if (this.plan && this.plan.totalBudget && this.plan.totalBudget > 0) y += 32;
-    return y;
-  }
-
   /** 计算预算使用比例 */
   private calcBudgetRatio(): number {
     if (!this.plan || !this.plan.totalBudget || this.plan.totalBudget <= 0) return 0;
@@ -757,30 +762,24 @@ export struct TourGuideContent {
           .backgroundColor(getTheme(this.themeMode).surfaceSecondary)
         }
 
-        // 日选择器（有计划时显示）
+        // 行程卡片（日选择器 + 行程概览 + 交通 + 预算 — 四合一的紧凑面板）
         if (this.plan && this.plan.dailyPlans.length > 0) {
-          Row() {
+          Column() {
+            // 第一行：日选择器（横滑）
             Scroll() {
               Row() {
                 ForEach(this.plan.dailyPlans, (day: TourDay, idx: number) => {
                   Text(day.label || `第${idx + 1}天`)
-                    .fontSize(12).fontColor(idx === this.selectedDayIndex ? '#FFF' : '#666')
-                    .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+                    .fontSize(11).fontColor(idx === this.selectedDayIndex ? '#FFF' : '#666')
+                    .padding({ left: 8, right: 8, top: 3, bottom: 3 })
                     .backgroundColor(idx === this.selectedDayIndex ? '#10B981' : '#FFFFFF')
-                    .borderRadius(12)
+                    .borderRadius(10)
                     .onClick(() => { this.selectDay(idx); })
                 }, (day: TourDay, idx: number): string => `${idx}_${day.label}`)
               }
-            }.scrollable(ScrollDirection.Horizontal)
-          }
-          .width('100%').padding({ left: 8, right: 8, top: 8 })
-          .position({ x: 0, y: 0 }).zIndex(10)
-        }
+            }.scrollable(ScrollDirection.Horizontal).height(28).margin({ bottom: 4 })
 
-        // 行程卡片 + 交通信息 + 预算（三合一）
-        if (this.plan && this.plan.dailyPlans.length > 0) {
-          Column() {
-            // 标题行：日期 + 交通 + 预算
+            // 第二行：当天标题 + 交通 + 预算
             Row() {
               Text(this.plan.dailyPlans[this.selectedDayIndex].label + ' 行程')
                 .fontSize(13).fontWeight(FontWeight.Bold)
@@ -799,7 +798,7 @@ export struct TourGuideContent {
                 Text(`💰 ¥${this.calcSpentTotal()}/¥${this.plan.totalBudget}`)
                   .fontSize(9).fontColor(this.calcSpentTotal() > this.plan.totalBudget! ? '#FF5252' : '#10B981')
               }
-            }.width('100%').margin({ bottom: 4 })
+            }.width('100%').margin({ bottom: 2 })
 
             // 进度条（有预算时）
             if (this.plan.totalBudget && this.plan.totalBudget > 0) {
@@ -830,9 +829,9 @@ export struct TourGuideContent {
               }
             }.scrollable(ScrollDirection.Horizontal).height(64)
           }
-          .width('90%').padding(8)
+          .width('94%').padding({ left: 8, right: 8, top: 6, bottom: 6 })
           .backgroundColor('#CCFFFFFF').borderRadius(12)
-          .position({ x: '5%', y: this.calcItineraryY() }).zIndex(9)
+          .position({ x: '3%', y: 0 }).zIndex(10)
         }
 
         // POI 详情弹窗
@@ -891,8 +890,28 @@ export struct TourGuideContent {
             LoadingProgress().width(14).height(14).color('#8B5CF6')
           }
         }.width('100%').margin({ bottom: 4 })
+        .gesture(
+          PanGesture({ fingers: 1, direction: PanDirection.Vertical, distance: 3 })
+            .onActionStart(() => {
+              this.chatDragStartH = this.chatScrollHeight;
+            })
+            .onActionUpdate((event: GestureEvent) => {
+              const newH: number = this.chatDragStartH - event.offsetY;
+              this.chatScrollHeight = Math.max(80, Math.min(350, newH));
+            })
+            .onActionEnd(() => {
+              this.chatScrollHeight = Math.max(80, Math.min(350, this.chatScrollHeight));
+            })
+        )
 
-        Scroll() {
+        // 拖拽手柄（视觉提示，按住上下拖动调整聊天框高度）
+        Row()
+          .width(36).height(5).borderRadius(2.5)
+          .backgroundColor('#C0C0C0')
+          .alignSelf(ItemAlign.Center)
+          .margin({ top: 2, bottom: 2 })
+
+        Scroll(this.chatScroller) {
           Column() {
             ForEach(this.chatMessages, (bubble: ChatBubble) => {
               Row() {
@@ -910,7 +929,7 @@ export struct TourGuideContent {
               }.width('100%').margin({ bottom: 6 })
             })
           }
-        }.height(160).margin({ bottom: 4 })
+        }.height(this.chatScrollHeight).margin({ bottom: 4 })
 
         if (this.quickReplies.length > 0) {
           Scroll() {
