@@ -55,20 +55,24 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
   * 用户选了酒店 → **用 search_and_add 添加**（不要用 make_plan），这样酒店会自动显示在地图上并纳入预算
   * 用户没提酒店 → 不问不搜
 - geocode_city 只需一次。城市换了才重新geocode
-- 用户说"第X天去/吃XX" → 直接 search_and_add，不要确认
+- **用户明确要求的才执行，不要替用户做决定！**
+  * 用户说"第X天去A和B" → 加 A 和 B（用户要求的，可以批量）
+  * 用户说"推荐几个景点" → 用文字列出建议，**不要 search_and_add**，等用户说"加XX"
+  * search_poi 只搜给用户看，不要把搜索结果全加进去
 - **make_plan 不要抢着调用！必须等以下条件全部满足后再问用户确认：**
   ① 用户已经说了玩几天（没说的话先问"打算玩几天？"）
   ② 交通已定（出发城市+日期已有搜索结果 或 本地游）
   ③ 预算已设
   满足了 → 问用户"现在帮你创建X天行程骨架？" → 用户同意再 make_plan
-- make_plan 只创建骨架，不自动加景点。完成后立即 search_and_add 推荐几个景点
+- make_plan 只创建骨架，完成后向用户建议几个景点，等用户指定再加
 - make_plan 填 days 参数反映用户说的天数
 - **主动推进但不越界！**
   * geocode 完 → 按顺序问：哪天出发？从哪个城市出发？→ 搜交通
   * 不要一上来就搜酒店！等用户给了预算或明确说"帮我找酒店"再 search_hotels
   * 信息不完整时先问，不要硬猜
-  * **不要替用户做决定！天数、酒店、预算都要等用户确认**
-- make_plan 完后立即 estimate_costs，不要等
+  * 落地先放行李：有酒店时首日自动生成"去酒店放行李"步骤，之后才开始安排景点
+  * **不要替用户做决定！你是建议者，用户是决策者**
+- 系统后台会自动重算预算，你每次回复时都能看到当前剩余预算
 - 每次回复末尾都给 2-3 个快捷选项
 - 工具调用失败了没关系，换个参数重试，别停下来聊天
 
@@ -90,13 +94,12 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
 - **绝对不要自己编造车次、时间或价格！** 不确定就说"建议到12306确认"，不要猜测
 - 用户选定后 → set_transport 记录
 
-## 预算管理（必须主动询问！）
+## 预算管理
 - **开始规划时主动问**："这次旅行预算大概多少？💰我帮你把控～"
-- 用户说出金额 → set_budget
-  {"action":"set_budget","amount":"5000"}
-- **make_plan 后必须主动估算** → estimate_costs 给出预算概览
-  {"action":"estimate_costs"}
-- 推荐酒店/餐厅时考虑预算（预算<3000推经济型、3000-8000推舒适型、>8000推豪华型）
+- 用户说出金额 → set_budget（系统会自动弹出预算概览）
+- 系统在 set_budget / make_plan / set_transport 时会自动展示预算概览
+- **你不需要手动调 estimate_costs**，除非用户明确问"看看预算""估算花费"
+- 推荐时参考上下文里显示的剩余预算：剩得多→品质好 | 剩得少→实惠 | 快超→提醒
 - 酒店推荐时附带价格区间，如"¥200-400/晚"
 - estimate_costs 估算规则（会根据城市自动调整）：
   * 港澳：餐饮×3.5、酒店×3.5（如香港正餐≈280/人，酒店≈1050/晚）
@@ -772,19 +775,41 @@ export class TourGuideAgent {
           estimatedCost: autoCost,
         };
 
-        // 有酒店时插在"返回"之前，无酒店时直接追加
+        // 按时间槽顺序插入，而非一味插最后
         let saInserted: boolean = false;
-        if (this.plan.hotel) {
-          for (let i: number = saDay.pois.length - 1; i >= 0; i--) {
-            if (saDay.pois[i].timeSlot === '返回') {
-              saDay.pois.splice(i, 0, newPoi);
-              saInserted = true;
-              break;
-            }
+        const slotPriority: Record<string, number> = {
+          '到达': 0, '入住': 1, '出发': 2,
+          '早餐': 10, '上午': 20, '午餐': 30, '下午': 40, '晚餐': 50, '晚上': 60,
+          '返回': 99
+        };
+        const newPriority: number = this.getSlotPriority(autoTimeSlot, slotPriority);
+        for (let i: number = 0; i < saDay.pois.length; i++) {
+          const existSlot: string = saDay.pois[i].timeSlot;
+          // 跳过标记型 POI（到达/出发/返回/入住 — 它们是锚点）
+          if (existSlot === '到达' || existSlot === '出发' || existSlot === '返回' || existSlot === '入住') {
+            continue;
+          }
+          const existPriority: number = this.getSlotPriority(existSlot, slotPriority);
+          if (newPriority < existPriority) {
+            saDay.pois.splice(i, 0, newPoi);
+            saInserted = true;
+            break;
           }
         }
+        // 插到最后（"返回"之前）
         if (!saInserted) {
-          saDay.pois.push(newPoi);
+          if (this.plan.hotel) {
+            for (let i: number = saDay.pois.length - 1; i >= 0; i--) {
+              if (saDay.pois[i].timeSlot === '返回') {
+                saDay.pois.splice(i, 0, newPoi);
+                saInserted = true;
+                break;
+              }
+            }
+          }
+          if (!saInserted) {
+            saDay.pois.push(newPoi);
+          }
         }
 
         // 酒店：替换出发+终点（晚上到酒店就住下，不用再"返回"出发地）
@@ -849,6 +874,12 @@ export class TourGuideAgent {
             });
           }
           if (this.plan.hotel) {
+            // 到达后第一步：去酒店放行李
+            basePois.push({
+              name: `去${this.plan.hotel.name}放行李`,
+              lat: this.plan.hotel.lat, lng: this.plan.hotel.lng,
+              type: '酒店入住', timeSlot: '入住', duration: '0.5h', note: ''
+            });
             basePois.push(
               { name: this.plan.hotel.name, lat: this.plan.hotel.lat, lng: this.plan.hotel.lng, type: '酒店住宿', timeSlot: '出发', duration: '', note: '' },
               { name: this.plan.hotel.name, lat: this.plan.hotel.lat, lng: this.plan.hotel.lng, type: '酒店住宿', timeSlot: '返回', duration: '', note: '' }
@@ -1366,10 +1397,14 @@ export class TourGuideAgent {
     // 合并结果
     const resp: AgentResponse = this.mergeResults(results);
 
-    // 自动串联：make_plan 或 set_budget 后自动估算花费（不管有没有行程）
-    const hasMakePlan: boolean = toolCalls.some(tc => tc.action === 'make_plan');
-    const hasSetBudget: boolean = toolCalls.some(tc => tc.action === 'set_budget');
-    if (hasMakePlan || hasSetBudget) {
+    // 后台静默重算（所有变更时更新，让 agent 上下文和 UI 看到最新预算）
+    if (this.plan.totalBudget && this.wasPlanModified(toolCalls)) {
+      this.silentRecalcCosts();
+    }
+    // 写入操作 → 展示预算概览确认（除去 estimate_costs 本身避免死循环）
+    const planChanged: boolean = this.wasPlanModified(toolCalls) &&
+      !toolCalls.some(tc => tc.action === 'estimate_costs');
+    if (this.plan.totalBudget && planChanged) {
       resp.toolCalls.push({ action: 'estimate_costs' });
     }
 
@@ -1390,7 +1425,11 @@ export class TourGuideAgent {
     if (this.isLocalTrip()) {
       planCtx += ` [本地游：用户常住${this.userCity}，无需酒店和跨城交通]`;
     }
-    if (this.plan.totalBudget) planCtx += ` 总预算=¥${this.plan.totalBudget}`;
+    if (this.plan.totalBudget) {
+      const br = getBudgetBreakdown(this.plan);
+      planCtx += ` 总预算=¥${this.plan.totalBudget} 已预估花费=¥${br.total} 剩余=¥${this.plan.totalBudget - br.total}`;
+      if (br.total > this.plan.totalBudget) planCtx += ` ⚠️超预算！`;
+    }
     if (this.plan.transportToCity) planCtx += ` 到达交通=${getTransportLabel(this.plan.transportToCity.type)}${this.plan.transportToCity.from}→${this.plan.transportToCity.to}` +
       (this.plan.transportToCity.cost && this.plan.transportToCity.cost > 0 ? ` ¥${this.plan.transportToCity.cost}` : '');
     if (this.plan.transportBack) planCtx += ` 返程交通=${getTransportLabel(this.plan.transportBack.type)}${this.plan.transportBack.from}→${this.plan.transportBack.to}` +
@@ -1434,6 +1473,53 @@ export class TourGuideAgent {
       return `${year}-${month}-${day}`;
     }
     return date; // 无法解析则原样返回
+  }
+
+  /** 后台静默重算预算 — 供 UI 和 agent 上下文使用，不打断对话 */
+  private silentRecalcCosts(): void {
+    if (!this.plan.totalBudget) return;
+    const costMul: number = TourGuideAgent.getCityCostMultiplier(this.plan.city);
+    for (const day of this.plan.dailyPlans) {
+      for (const poi of day.pois) {
+        if (poi.timeSlot === '出发' || poi.timeSlot === '返回' || poi.timeSlot === '入住' || poi.timeSlot === '到达') continue;
+        const t: string = poi.type || '';
+        if (t.includes('酒店') || t.includes('住宿')) {
+          poi.estimatedCost = this.isLocalTrip() ? 0 : Math.round((this.plan.hotel ? 300 : 200) * costMul);
+        } else if (t.includes('餐厅') || t.includes('美食') || t.includes('小吃') || t.includes('咖啡')) {
+          poi.estimatedCost = Math.round(80 * costMul);
+        } else if (poi.timeSlot.includes('餐')) {
+          poi.estimatedCost = Math.round(80 * costMul);
+        } else if (t.includes('交通') || t.includes('飞机') || t.includes('高铁') || t.includes('火车')) {
+          poi.estimatedCost = this.isLocalTrip() ? 0 : Math.round((t.includes('飞机') ? 800 : (t.includes('高铁') ? 500 : 200)) * costMul);
+        } else if (t.includes('景点') || t.includes('公园') || t.includes('风景') || t.includes('博物馆')) {
+          poi.estimatedCost = Math.round(60 * costMul);
+        } else if (t.includes('购物') || t.includes('商场')) {
+          poi.estimatedCost = Math.round(100 * costMul);
+        }
+      }
+    }
+    if (!this.isLocalTrip()) {
+      if (this.plan.transportToCity && (!this.plan.transportToCity.cost || this.plan.transportToCity.cost <= 0)) {
+        const tt: string = this.plan.transportToCity.type;
+        this.plan.transportToCity.cost = tt === 'flight' ? 800 : (tt === 'high_speed_rail' ? 500 : (tt === 'train' ? 200 : 100));
+      }
+      if (this.plan.transportBack && (!this.plan.transportBack.cost || this.plan.transportBack.cost <= 0)) {
+        const tb: string = this.plan.transportBack.type;
+        this.plan.transportBack.cost = tb === 'flight' ? 800 : (tb === 'high_speed_rail' ? 500 : (tb === 'train' ? 200 : 100));
+      }
+      if (this.plan.hotel && (!this.plan.hotel.estimatedCost || this.plan.hotel.estimatedCost <= 0)) {
+        this.plan.hotel.estimatedCost = Math.round(this.plan.days * 300 * costMul);
+      }
+    }
+  }
+
+  /** 时间槽优先级（辅助排序） */
+  private getSlotPriority(slot: string, map: Record<string, number>): number {
+    if (!slot) return 15; // 无时间槽 → 放中间
+    for (const key of Object.keys(map)) {
+      if (slot.includes(key)) return map[key];
+    }
+    return 15;
   }
 
   /** 自动分配下一个可用时间段 */
