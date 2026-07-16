@@ -62,7 +62,7 @@ export class TransportSearchService {
    *  端点: kyfw.12306.cn/otn/leftTicket/queryG */
   async searchTrainsVia12306(fromCity: string, toCity: string, date: string): Promise<TicketOption[]> {
     // 12306 必须传日期 — 未指定时默认今天
-    const queryDate: string = date && date.length > 0 ? date : this.todayStr();
+    const queryDate: string = date && date.length > 0 ? date : this.defaultDateStr();
     if (!queryDate) {
       Logger.warn(TAG, '12306: cannot determine date');
       return [];
@@ -141,22 +141,16 @@ export class TransportSearchService {
     return allOptions;
   }
 
-  /** 调用 12306 queryG — init+查询在同一 http 会话内完成，Cookie 自动保持 */
+  /** 调用 12306 queryG — init+queryG 在同一 http 会话内 */
   private async query12306(fromCode: string, toCode: string, date: string): Promise<TicketOption[]> {
     const req: http.HttpRequest = http.createHttp();
     try {
-      // Step 1: 访问 init 页面建立 Cookie 会话
       await req.request('https://kyfw.12306.cn/otn/leftTicket/init', {
         method: http.RequestMethod.GET,
-        header: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept-Language': 'zh-CN,zh;q=0.9',
-        },
-        connectTimeout: 15000,
-        readTimeout: 20000,
+        header: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept-Language': 'zh-CN,zh;q=0.9' },
+        connectTimeout: 15000, readTimeout: 20000,
       } as http.HttpRequestOptions);
 
-      // Step 2: 用同一会话查 queryG（Cookie 自动带上）
       const url: string =
         'https://kyfw.12306.cn/otn/leftTicket/queryG' +
         `?leftTicketDTO.train_date=${encodeURIComponent(date)}` +
@@ -172,27 +166,18 @@ export class TransportSearchService {
           'Referer': 'https://kyfw.12306.cn/otn/leftTicket/init',
           'Accept-Language': 'zh-CN,zh;q=0.9',
         },
-        connectTimeout: 15000,
-        readTimeout: 20000,
+        connectTimeout: 15000, readTimeout: 20000,
       } as http.HttpRequestOptions);
 
-      if (resp.responseCode !== 200 || !resp.result) {
-        throw new Error(`HTTP ${resp.responseCode}`);
-      }
+      if (resp.responseCode !== 200 || !resp.result) throw new Error(`HTTP ${resp.responseCode}`);
 
       const resultStr: string = typeof resp.result === 'string' ? resp.result : JSON.stringify(resp.result);
       const json: Record<string, Object> = JSON.parse(resultStr) as Record<string, Object>;
-      const httpstatus: number = (json['httpstatus'] as number) ?? 200;
-      if (httpstatus !== 200) {
-        throw new Error(`12306 httpstatus: ${httpstatus}`);
-      }
+      if (((json['httpstatus'] as number) ?? 200) !== 200) throw new Error('12306 rejected');
 
       const data: Record<string, Object> = json['data'] as Record<string, Object>;
-      let resultArr: string[] = (data?.['result'] as string[]) ?? [];
-
-      if (resultArr.length === 0) {
-        Logger.warn(TAG, '12306 returned 0 results');
-      }
+      const resultArr: string[] = (data?.['result'] as string[]) ?? [];
+      if (resultArr.length === 0) Logger.warn(TAG, '12306 returned 0 results for %{public}s→%{public}s', fromCode, toCode);
 
       return this.parse12306Result(resultArr, fromCode, toCode);
     } finally {
@@ -200,65 +185,48 @@ export class TransportSearchService {
     }
   }
 
-  /** 查询 12306 票价（独立 API: queryAllPublicPrice）。价格格式: 整数/10=元 */
+  /** 查询 12306 票价。价格格式: 整数/10=元 */
   private async query12306Prices(fromCode: string, toCode: string, date: string):
     Promise<Record<string, TicketPrice>> {
     const req: http.HttpRequest = http.createHttp();
     try {
       await req.request('https://kyfw.12306.cn/otn/leftTicket/init', {
         method: http.RequestMethod.GET,
-        header: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept-Language': 'zh-CN,zh;q=0.9',
-        },
+        header: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept-Language': 'zh-CN,zh;q=0.9' },
         connectTimeout: 15000, readTimeout: 20000,
       } as http.HttpRequestOptions);
 
-      const url: string =
-        'https://kyfw.12306.cn/otn/leftTicketPrice/queryAllPublicPrice' +
+      const url: string = 'https://kyfw.12306.cn/otn/leftTicketPrice/queryAllPublicPrice' +
         `?leftTicketDTO.train_date=${encodeURIComponent(date)}` +
         `&leftTicketDTO.from_station=${encodeURIComponent(fromCode)}` +
-        `&leftTicketDTO.to_station=${encodeURIComponent(toCode)}` +
-        '&purpose_codes=ADULT';
+        `&leftTicketDTO.to_station=${encodeURIComponent(toCode)}&purpose_codes=ADULT`;
 
       const resp: http.HttpResponse = await req.request(url, {
         method: http.RequestMethod.GET,
-        header: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept': 'application/json',
-          'Referer': 'https://kyfw.12306.cn/otn/leftTicket/init',
-          'Accept-Language': 'zh-CN,zh;q=0.9',
-        },
+        header: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': 'application/json', 'Referer': 'https://kyfw.12306.cn/otn/leftTicket/init', 'Accept-Language': 'zh-CN,zh;q=0.9' },
         connectTimeout: 15000, readTimeout: 20000,
       } as http.HttpRequestOptions);
 
       if (resp.responseCode !== 200 || !resp.result) return {};
-
       const resultStr: string = typeof resp.result === 'string' ? resp.result : JSON.stringify(resp.result);
       const json: Record<string, Object> = JSON.parse(resultStr) as Record<string, Object>;
       const dataArr: Object[] = (json['data'] as Object[]) ?? [];
       const map: Record<string, TicketPrice> = {};
-
       for (const item of dataArr) {
         const dto: Record<string, Object> = (item as Record<string, Object>)['queryLeftNewDTO'] as Record<string, Object>;
         if (!dto) continue;
         const trainCode: string = (dto['station_train_code'] as string) || '';
         if (!trainCode) continue;
         map[trainCode] = {
-          ze: this.parsePriceField(dto['ze_price'] as string),
-          zy: this.parsePriceField(dto['zy_price'] as string),
-          swz: this.parsePriceField(dto['swz_price'] as string),
-          yz: this.parsePriceField(dto['yz_price'] as string),
-          yw: this.parsePriceField(dto['yw_price'] as string),
-          rw: this.parsePriceField(dto['rw_price'] as string),
+          ze: this.parsePriceField(dto['ze_price'] as string), zy: this.parsePriceField(dto['zy_price'] as string),
+          swz: this.parsePriceField(dto['swz_price'] as string), yz: this.parsePriceField(dto['yz_price'] as string),
+          yw: this.parsePriceField(dto['yw_price'] as string), rw: this.parsePriceField(dto['rw_price'] as string),
           wz: this.parsePriceField(dto['wz_price'] as string),
         };
       }
       Logger.info(TAG, 'Price query: %{public}d trains', Object.keys(map).length);
       return map;
-    } finally {
-      req.destroy();
-    }
+    } finally { req.destroy(); }
   }
 
   /** 解析价格字段: 12306 单位 0.1元 → "09340" = 934.0 */
@@ -390,9 +358,10 @@ export class TransportSearchService {
     return results;
   }
 
-  /** 获取今天的日期字符串 YYYY-MM-DD */
-  private todayStr(): string {
+  /** 获取 5 天后的日期 YYYY-MM-DD（用户未指定日期时的默认值） */
+  private defaultDateStr(): string {
     const d: Date = new Date();
+    d.setDate(d.getDate() + 5);
     const y: number = d.getFullYear();
     const m: string = String(d.getMonth() + 1).padStart(2, '0');
     const day: string = String(d.getDate()).padStart(2, '0');

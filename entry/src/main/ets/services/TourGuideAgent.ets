@@ -49,16 +49,19 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
 - **最重要的规则：每次回复末尾都必须带 ---JSON--- 工具调用！**
   * 只有纯粹闲聊（打招呼、道谢）才不加。其余情况：定位→搜交通→问预算→搜酒店→生成计划→完善行程，每一步都输出工具！
   * 宁可多调用一次，也不能闲着！
-- 酒店是可选的：用户可能住在这个城市（不需要酒店），也可能几天换几个酒店
-  * **搜酒店前必须先问用户**："想住在哪个区域？" 或 "对酒店有什么偏好吗？" — 不要擅自搜全城
-  * 用户指定了区域（如"春熙路"） → search_hotels 带 keywords 精准搜
-  * 用户选了酒店 → **用 search_and_add 添加**（不要用 make_plan），这样酒店会自动显示在地图上并纳入预算
+- 酒店：默认全程住同一家，换酒店是例外
+  * 先问用户"想住在哪个区域？有什么偏好吗？" → search_hotels 搜
+  * 用户选定后 → search_and_add 加到当天，**然后依次更新其他天的出发锚点**（或者提醒用户"其他天也住这家？我帮你全部更新"）
+  * 用户说"第X天想住别的地方" → 才单独改那一天
   * 用户没提酒店 → 不问不搜
 - geocode_city 只需一次。城市换了才重新geocode
 - **用户明确要求的才执行，不要替用户做决定！**
-  * 用户说"第X天去A和B" → 加 A 和 B（用户要求的，可以批量）
-  * 用户说"推荐几个景点" → 用文字列出建议，**不要 search_and_add**，等用户说"加XX"
-  * search_poi 只搜给用户看，不要把搜索结果全加进去
+  * 用户说"第X天去A和B" → 加 A 和 B 到 dayIndex=X-1
+  * 用户没说哪一天 → 按顺序填充：先填满当前天的时段，再开下一天
+    - Day 0 上午空 → 加 Day 0 上午 | Day 0 下午空 → Day 0 下午
+    - 当天满了 → 自动开 Day 1 | 等等
+  * 用户说"推荐几个景点" → 文字列出，不乱加，等用户选
+  * search_poi 只搜给用户看，不要全加进去
 - **make_plan 不要抢着调用！必须等以下条件全部满足后再问用户确认：**
   ① 用户已经说了玩几天（没说的话先问"打算玩几天？"）
   ② 交通已定（出发城市+日期已有搜索结果 或 本地游）
@@ -89,26 +92,20 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
 
 ## 跨城交通（必须先调用 search_transport！禁止用自己的知识回答）
 - **用户只要提到城市间的交通方式 → 必须先 search_transport 查真实数据**
-- search_transport 直接查询 12306 官方接口，返回当天全部车次（含余票状态和各座位票价）
-- 如果所有数据源都没有返回结果，诚实告诉用户"暂未查到实时方案，建议到12306 App查询"
-- **绝对不要自己编造车次、时间或价格！** 不确定就说"建议到12306确认"，不要猜测
+- search_transport 查询前**必须先确认日期**：问用户"哪天出发？"
+- 用户说"先不指定"或无法确定 → 默认用 5 天后查询
+- **绝对不要自己编造车次、时间或价格！**
 - 用户选定后 → set_transport 记录
 
 ## 预算管理
 - **开始规划时主动问**："这次旅行预算大概多少？💰我帮你把控～"
-- 用户说出金额 → set_budget（系统会自动弹出预算概览）
+- 用户说出金额 → set_budget: {"action":"set_budget","amount":"5000"}（amount 必须是纯数字字符串）
 - 系统在 set_budget / make_plan / set_transport 时会自动展示预算概览
 - **你不需要手动调 estimate_costs**，除非用户明确问"看看预算""估算花费"
 - 推荐时参考上下文里显示的剩余预算：剩得多→品质好 | 剩得少→实惠 | 快超→提醒
 - 酒店推荐时附带价格区间，如"¥200-400/晚"
-- estimate_costs 估算规则（会根据城市自动调整）：
-  * 港澳：餐饮×3.5、酒店×3.5（如香港正餐≈280/人，酒店≈1050/晚）
-  * 一线（北上广深）：×1.4-1.5（正餐≈120/人，酒店≈450/晚）
-  * 新一线（成都杭州等）：×1.2（正餐≈95/人，酒店≈360/晚）
-  * 二线及以下：×1.0（正餐≈80/人，酒店≈300/晚）
-  * 跨城交通按实际票价
-- **绝不能用二线城市价格估算香港！** 香港吃一顿快餐也要50-80港币，正餐150-400港币
-- 估算完成后明确告知用户预算是否够用，不够就说"⚠️可能超预算，建议减少XX或选择经济型"
+- 所有花费估算由系统后台自动计算，你不需要手动计算或告知单价
+- 预算概览中的「住宿」已是总价（天数×每晚均价），不要再次乘以天数
 
 ## 本地人模式（用户常住城市 = 目的地城市）
 - 用户就在本地，不需要跨城交通！不要问"哪天出发""从哪个城市出发""怎么回来"
@@ -145,6 +142,7 @@ export interface ToolCall {
   number?: string;
   // 预算
   amount?: string;
+  budget?: string;  // 兼容: AI 有时用 budget 代替 amount
   cost?: string;
   date?: string;
 }
@@ -775,63 +773,63 @@ export class TourGuideAgent {
           estimatedCost: autoCost,
         };
 
-        // 按时间槽顺序插入，而非一味插最后
+        // 按时间槽顺序插入
         let saInserted: boolean = false;
-        const slotPriority: Record<string, number> = {
-          '到达': 0, '入住': 1, '出发': 2,
-          '早餐': 10, '上午': 20, '午餐': 30, '下午': 40, '晚餐': 50, '晚上': 60,
-          '返回': 99
-        };
-        const newPriority: number = this.getSlotPriority(autoTimeSlot, slotPriority);
-        for (let i: number = 0; i < saDay.pois.length; i++) {
-          const existSlot: string = saDay.pois[i].timeSlot;
-          // 跳过标记型 POI（到达/出发/返回/入住 — 它们是锚点）
-          if (existSlot === '到达' || existSlot === '出发' || existSlot === '返回' || existSlot === '入住') {
-            continue;
-          }
-          const existPriority: number = this.getSlotPriority(existSlot, slotPriority);
-          if (newPriority < existPriority) {
-            saDay.pois.splice(i, 0, newPoi);
-            saInserted = true;
-            break;
-          }
-        }
-        // 插到最后（"返回"之前）
-        if (!saInserted) {
-          if (this.plan.hotel) {
-            for (let i: number = saDay.pois.length - 1; i >= 0; i--) {
-              if (saDay.pois[i].timeSlot === '返回') {
-                saDay.pois.splice(i, 0, newPoi);
-                saInserted = true;
-                break;
-              }
+        // 酒店特殊处理：放在"出发"之后第一个位置
+        const isHotel: boolean = (first.type || '').includes('酒店') || (first.type || '').includes('宾馆') || (first.type || '').includes('民宿');
+        if (isHotel) {
+          for (let i: number = 0; i < saDay.pois.length; i++) {
+            if (saDay.pois[i].timeSlot === '出发') {
+              saDay.pois.splice(i + 1, 0, newPoi);
+              saInserted = true;
+              break;
             }
           }
-          if (!saInserted) {
-            saDay.pois.push(newPoi);
+        }
+        if (!saInserted) {
+          const slotPriority: Record<string, number> = {
+            '到达': 0, '入住': 1, '出发': 2,
+            '早餐': 10, '上午': 20, '午餐': 30, '下午': 40, '晚餐': 50, '晚上': 60
+          };
+          const newPriority: number = this.getSlotPriority(autoTimeSlot, slotPriority);
+          for (let i: number = 0; i < saDay.pois.length; i++) {
+            const existSlot: string = saDay.pois[i].timeSlot;
+            if (existSlot === '到达' || existSlot === '出发' || existSlot === '入住') continue;
+            const existPriority: number = this.getSlotPriority(existSlot, slotPriority);
+            if (newPriority < existPriority) {
+              saDay.pois.splice(i, 0, newPoi);
+              saInserted = true;
+              break;
+            }
           }
         }
+        if (!saInserted) {
+          saDay.pois.push(newPoi);
+        }
 
-        // 酒店：替换出发+终点（晚上到酒店就住下，不用再"返回"出发地）
+        // 酒店：默认全程住同一家，同步更新所有天的出发锚点
         if (first.type.includes('酒店') || first.type.includes('宾馆') || first.type.includes('民宿')) {
           this.plan.hotel = { name: first.name, lat: first.latitude, lng: first.longitude,
             type: '酒店住宿', timeSlot: '入住', duration: '全程', note: first.address || '' };
-          for (let i: number = saDay.pois.length - 1; i >= 0; i--) {
-            if (saDay.pois[i].timeSlot === '返回') {
-              saDay.pois[i] = { name: first.name, lat: first.latitude, lng: first.longitude,
-                type: '酒店住宿', timeSlot: '入住', duration: '', note: first.address || '' };
-              break;
+          // 更新所有天的出发锚点
+          for (const d of this.plan.dailyPlans) {
+            let found: boolean = false;
+            for (let i: number = 0; i < d.pois.length; i++) {
+              if (d.pois[i].timeSlot === '出发') {
+                d.pois[i] = { name: first.name, lat: first.latitude, lng: first.longitude,
+                  type: '酒店住宿', timeSlot: '出发', duration: '', note: first.address || '' };
+                found = true;
+                break;
+              }
+            }
+            if (!found) {
+              d.pois.unshift({
+                name: first.name, lat: first.latitude, lng: first.longitude,
+                type: '酒店住宿', timeSlot: '出发', duration: '', note: first.address || ''
+              });
             }
           }
-          // 同时更新出发地（如果还没出发就定了酒店）
-          for (let i: number = 0; i < saDay.pois.length; i++) {
-            if (saDay.pois[i].timeSlot === '出发') {
-              saDay.pois[i] = { name: first.name, lat: first.latitude, lng: first.longitude,
-                type: '酒店住宿', timeSlot: '出发', duration: '', note: first.address || '' };
-              break;
-            }
-          }
-          resultText = `已更新${saDay.label}酒店为"${first.name}"（终点直接入住）。`;
+          resultText = `已设全程酒店为"${first.name}"（所有天已更新）。`;
         }
 
         // 重算路线
@@ -874,16 +872,20 @@ export class TourGuideAgent {
             });
           }
           if (this.plan.hotel) {
-            // 到达后第一步：去酒店放行李
+            // Day 0 外地到达 → 先放行李（其他天不重复）
+            if (nd === 0 && !this.isLocalTrip()) {
+              basePois.push({
+                name: `去${this.plan.hotel.name}放行李`,
+                lat: this.plan.hotel.lat, lng: this.plan.hotel.lng,
+                type: '酒店入住', timeSlot: '入住', duration: '0.5h', note: ''
+              });
+            }
+            // 每天起点：从酒店出发（终点=当天最后一个景点，不加空"返回"锚点）
             basePois.push({
-              name: `去${this.plan.hotel.name}放行李`,
+              name: `${this.plan.hotel.name}出发`,
               lat: this.plan.hotel.lat, lng: this.plan.hotel.lng,
-              type: '酒店入住', timeSlot: '入住', duration: '0.5h', note: ''
+              type: '酒店住宿', timeSlot: '出发', duration: '', note: ''
             });
-            basePois.push(
-              { name: this.plan.hotel.name, lat: this.plan.hotel.lat, lng: this.plan.hotel.lng, type: '酒店住宿', timeSlot: '出发', duration: '', note: '' },
-              { name: this.plan.hotel.name, lat: this.plan.hotel.lat, lng: this.plan.hotel.lng, type: '酒店住宿', timeSlot: '返回', duration: '', note: '' }
-            );
           }
           this.plan.dailyPlans.push({
             dayIndex: nd, label: `第${nd + 1}天`, pois: basePois, route: null
@@ -919,7 +921,7 @@ export class TourGuideAgent {
         break;
       }
       case 'set_budget': {
-        const budgetStr: string = params['amount'] ?? '';
+        const budgetStr: string = params['amount'] ?? params['budget'] ?? '';
         const budgetNum: number = parseInt(budgetStr);
         if (budgetNum > 0) {
           this.plan.totalBudget = budgetNum;
@@ -1278,6 +1280,8 @@ export class TourGuideAgent {
     if (tc.number) p['number'] = tc.number;
     if (tc.amount) p['amount'] = tc.amount;
     if (tc.cost) p['cost'] = tc.cost;
+    // 兼容: AI 可能用 budget 代替 amount
+    if (tc.budget) p['amount'] = tc.budget;
     if (tc.date) p['date'] = tc.date;
     return p;
   }
@@ -1744,6 +1748,7 @@ export class TourGuideAgent {
     if (obj['number']) tc.number = obj['number'];
     // 预算
     if (obj['amount']) tc.amount = obj['amount'];
+    if (obj['budget']) tc.amount = obj['budget'];  // 兼容 budget→amount
     if (obj['cost']) tc.cost = obj['cost'];
     if (obj['date']) tc.date = obj['date'];
     return tc;

@@ -812,7 +812,10 @@ export struct TourGuideContent {
             // POI 横滑列表
             Scroll() {
               Row() {
-                ForEach(this.plan.dailyPlans[this.selectedDayIndex].pois, (poi: import('../model/TourPlan').TourPoiItem, pidx: number) => {
+                ForEach(
+                  this.plan.dailyPlans[this.selectedDayIndex].pois.filter((p: import('../model/TourPlan').TourPoiItem) =>
+                    p.timeSlot !== '出发' && p.timeSlot !== '返回' && p.timeSlot !== '到达'),
+                  (poi: import('../model/TourPlan').TourPoiItem, pidx: number) => {
                   Column() {
                     Text(this.poiEmoji(poi.type)).fontSize(20)
                     Text(poi.name).fontSize(9).fontColor(getTheme(this.themeMode).textSecondary).maxLines(1)
