@@ -197,13 +197,14 @@ export struct TourGuideContent {
     try {
       const resp: AgentResponse = await this.agent.process(input);
 
-      if (resp.toolCall) {
+      if (resp.toolCalls.length > 0) {
+        const toolNames: string = resp.toolCalls.map(tc => tc.action).join('+');
         this.chatMessages.push({
           role: 'ai',
-          content: resp.text + '\n\n🔍 正在查找...'
+          content: resp.text + `\n\n🔍 ${toolNames}...`
         });
         this.chatScroller.scrollEdge(Edge.Bottom);
-        await this.autoExecuteTool(resp.toolCall);
+        await this.autoExecuteTools(resp.toolCalls);
       } else {
         this.chatMessages.push({ role: 'ai', content: resp.text });
         this.chatScroller.scrollEdge(Edge.Bottom);
@@ -227,76 +228,69 @@ export struct TourGuideContent {
       this.isAiThinking = false;
       // 强制每次对话后重绘地图，确保地图始终反映当前 plan
       if (this.plan && this.plan.dailyPlans.length > 0 && this.isMapReady && this.mapService) {
-        await this.drawPlanOnMap(this.plan);
+        this.drawPlanOnMap(this.plan); // 异步绘制，不阻塞UI
       }
     }
   }
 
-  /** 自动执行工具调用并继续对话
-   *  第一阶段：执行工具 → 立即更新地图（不等待 AI）
-   *  第二阶段：询问 AI 下一步 → 继续链式调用 */
-  async autoExecuteTool(toolCall: ToolCall): Promise<void> {
+  /** 批量执行工具调用并继续对话
+   *  geocode 完成后立即移动地图（不等其余工具），其余工具完成后追加标记
+   *  第二阶段：询问 AI 下一步 → 链式调用下一批 */
+  async autoExecuteTools(toolCalls: ToolCall[]): Promise<void> {
+    if (toolCalls.length === 0) return;
+    const primaryAction: string = toolCalls[0].action;
     try {
-      const params: Record<string, string> = {};
-      if (toolCall.keywords) params['keywords'] = toolCall.keywords;
-      if (toolCall.city) params['city'] = toolCall.city;
-      if (toolCall.hotel) params['hotel'] = toolCall.hotel;
-      if (toolCall.hotelLat) params['hotelLat'] = toolCall.hotelLat;
-      if (toolCall.hotelLng) params['hotelLng'] = toolCall.hotelLng;
-      if (toolCall.days) params['days'] = toolCall.days;
-      if (toolCall.dayIndex) params['dayIndex'] = toolCall.dayIndex;
-      if (toolCall.poiIndex) params['poiIndex'] = toolCall.poiIndex;
-      if (toolCall.name) params['name'] = toolCall.name;
-      if (toolCall.lat) params['lat'] = toolCall.lat;
-      if (toolCall.lng) params['lng'] = toolCall.lng;
-      if (toolCall.type) params['type'] = toolCall.type;
-      if (toolCall.timeSlot) params['timeSlot'] = toolCall.timeSlot;
-      if (toolCall.note) params['note'] = toolCall.note;
-      if (toolCall.mode) params['mode'] = toolCall.mode;
-      if (toolCall.from) params['from'] = toolCall.from;
-      if (toolCall.to) params['to'] = toolCall.to;
-      if (toolCall.fromStation) params['fromStation'] = toolCall.fromStation;
-      if (toolCall.toStation) params['toStation'] = toolCall.toStation;
-      if (toolCall.departureTime) params['departureTime'] = toolCall.departureTime;
-      if (toolCall.arrivalTime) params['arrivalTime'] = toolCall.arrivalTime;
-      if (toolCall.number) params['number'] = toolCall.number;
-      if (toolCall.amount) params['amount'] = toolCall.amount;
-      if (toolCall.cost) params['cost'] = toolCall.cost;
-      if (toolCall.date) params['date'] = toolCall.date;
+      // 第一阶段：批量执行工具（geocode 优先 + 其余并行）
+      // geocode 完成后立即回调 → 地图中心先跳，不等搜索
+      let geoMoved: boolean = false;
+      const resp: AgentResponse = await this.agent.executeToolsAndContinue(toolCalls,
+        (phase: string, partial: AgentResponse) => {
+          if (phase === 'geocode_done' && this.isMapReady && this.mapService) {
+            if (partial.mapCenter) {
+              this.mapCenter = partial.mapCenter;
+              this.mapService.moveCamera(partial.mapCenter, 13);
+              geoMoved = true;
+            }
+            if (partial.markers && partial.markers.length > 0) {
+              this.showMarkersOnMap(partial.markers);
+            }
+            Logger.info(TAG, 'Map updated after geocode phase');
+          }
+        });
 
-      // 第一阶段：执行工具（快速，不等待 AI）
-      const resp: AgentResponse = await this.agent.executeToolAndContinue(toolCall.action, params);
-
-      // 立即更新地图 — 不等 AI 回复
-      // set_budget 即使无 dailyPlans 也更新 state（确保预算持久化）
-      if (resp.plan && (resp.plan.dailyPlans.length > 0 || toolCall.action === 'set_budget')) {
+      // 全部工具完成 → 完整地图更新
+      if (resp.plan && (resp.plan.dailyPlans.length > 0 || toolCalls.some(tc => tc.action === 'set_budget'))) {
         this.plan = resp.plan;
         this.saveState();
         if (resp.plan.dailyPlans.length > 0) {
-          this.clearCurrentMarkers();
-          await this.drawPlanOnMap(resp.plan);
+          // 不清空临时标记！酒店搜索结果等应保持可见，等用户选定加入计划后自然更新
+          this.drawPlanOnMap(resp.plan); // 异步绘制：标记立即显示，路线后台计算
         }
       }
       if (this.isMapReady && this.mapService) {
-        if (resp.mapCenter) {
+        // 如果 geocode 回调已经移过了且新的 mapCenter 相同，跳过
+        if (resp.mapCenter && !geoMoved) {
+          this.mapCenter = resp.mapCenter;
+          this.mapService.moveCamera(resp.mapCenter, 13);
+        } else if (resp.mapCenter && geoMoved &&
+                   (resp.mapCenter.latitude !== this.mapCenter.latitude ||
+                    resp.mapCenter.longitude !== this.mapCenter.longitude)) {
           this.mapCenter = resp.mapCenter;
           this.mapService.moveCamera(resp.mapCenter, 13);
         }
         if (resp.markers && resp.markers.length > 0) {
           this.showMarkersOnMap(resp.markers);
         }
-        // 展示交通方案列表
         if (resp.transportOptions && resp.transportOptions.length > 0) {
           this.transportOptions = resp.transportOptions;
         }
-        this.updateQuickReplies(resp.markers || [], toolCall.action);
+        this.updateQuickReplies(resp.markers || [], primaryAction);
       }
 
       // 第二阶段：询问 AI 下一步
-      let nextTool: ToolCall | undefined = undefined;
       try {
-        const aiResp = await this.agent.askAiNextStep(toolCall.action, resp.text);
-        nextTool = aiResp.toolCall;
+        const results: import('../services/TourGuideAgent').ToolResult[] = this.agent.getLastToolResults();
+        const aiResp: AgentResponse = await this.agent.askAiNextStep(results);
 
         // 替换占位消息并显示 AI 回复
         if (this.chatMessages.length > 0) {
@@ -307,25 +301,24 @@ export struct TourGuideContent {
         }
         // 对于信息性工具，显示工具执行结果（预算概览等）
         const infoActions: string[] = ['estimate_costs', 'set_budget'];
-        if (infoActions.indexOf(toolCall.action) >= 0 && resp.text && resp.text.length > 0) {
+        if (toolCalls.some(tc => infoActions.indexOf(tc.action) >= 0) && resp.text && resp.text.length > 0) {
           this.chatMessages.push({ role: 'ai', content: resp.text });
           this.chatScroller.scrollEdge(Edge.Bottom);
         }
-        // 如果有意义的回复才添加，否则保留 Phase 1 的结果
+        // 如果有意义的回复才添加
         if (aiResp.text && aiResp.text.length > 2 && aiResp.text !== '收到，请继续。') {
           this.chatMessages.push({ role: 'ai', content: aiResp.text });
           this.chatScroller.scrollEdge(Edge.Bottom);
         }
         this.saveState();
 
-        // 链式调用：AI 下一步 OR 系统自动串联
-        const chainTool: ToolCall | undefined = nextTool || resp.toolCall;
-        Logger.info(TAG, 'Chain check: nextTool=%{public}s respTool=%{public}s → chain=%{public}s',
-          nextTool?.action || 'null', resp.toolCall?.action || 'null', chainTool?.action || 'null');
-        if (chainTool) {
-          this.chatMessages.push({ role: 'ai', content: '🔍 ' + chainTool.action + '...' });
+        // 链式调用：AI 返回的 + 系统自动串联的，合并成新批次
+        const chainTools: ToolCall[] = [...aiResp.toolCalls, ...resp.toolCalls];
+        if (chainTools.length > 0) {
+          const chainNames: string = chainTools.map(tc => tc.action).join('+');
+          this.chatMessages.push({ role: 'ai', content: '🔍 ' + chainNames + '...' });
           this.chatScroller.scrollEdge(Edge.Bottom);
-          await this.autoExecuteTool(chainTool);
+          await this.autoExecuteTools(chainTools);
         }
       } catch (_e) {
         // Phase 2 失败不丢 Phase 1 的结果，只去掉 🔍 占位
@@ -338,8 +331,8 @@ export struct TourGuideContent {
         Logger.warn(TAG, 'askAiNextStep failed, keeping phase1 result');
       }
     } catch (e) {
-      Logger.error(TAG, 'autoExecuteTool failed for %{public}s: %{public}s',
-        toolCall.action, JSON.stringify(e));
+      Logger.error(TAG, 'autoExecuteTools failed for %{public}s: %{public}s',
+        primaryAction, JSON.stringify(e));
       // 去掉占位消息
       if (this.chatMessages.length > 0) {
         const last = this.chatMessages[this.chatMessages.length - 1];
@@ -347,7 +340,8 @@ export struct TourGuideContent {
           this.chatMessages = this.chatMessages.slice(0, -1);
         }
       }
-      this.chatMessages.push({ role: 'ai', content: '😅 ' + toolCall.action + '执行出错，请再试一次。' });
+      const errNames: string = toolCalls.map(tc => tc.action).join('+');
+      this.chatMessages.push({ role: 'ai', content: '😅 ' + errNames + '执行出错，请再试一次。' });
       this.chatScroller.scrollEdge(Edge.Bottom);
     }
   }
@@ -491,7 +485,7 @@ export struct TourGuideContent {
     this.chatScroller.scrollEdge(Edge.Bottom);
     this.isAiThinking = true;
     try {
-      await this.autoExecuteTool(toolCall);
+      await this.autoExecuteTools([toolCall]);
     } catch (_e) {
       this.chatMessages.push({ role: 'ai', content: '记录交通方案失败，请重试。' });
       this.chatScroller.scrollEdge(Edge.Bottom);

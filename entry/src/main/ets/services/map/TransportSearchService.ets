@@ -1,13 +1,14 @@
 /**
  * 票务搜索服务
- * 火车票：聚合数据，免费 10次/天，注册: https://www.juhe.cn
- * 机票：WebXml 免费 WebService，非商用免费: http://www.webxml.com.cn
+ * 火车：12306 官方 queryG API（免费，返回当天全部车次 + 余票）
+ * 机票：WebXml 免费 WebService（非商用免费）
  */
 import { Logger } from '../../common/Logger';
 import { PlatformBridge } from '../../platform/PlatformBridge';
+import { StationCodeService } from './StationCodeService';
+import { http } from '@kit.NetworkKit';
 
 const TAG = 'TransportSearch';
-const JUHE_KEY: string = ''; // TODO: 填入聚合数据 API Key (juhe.cn 注册获取)
 
 /** 票务查询参数 */
 export interface TicketQueryParams {
@@ -33,7 +34,7 @@ export interface TicketOption {
   price: number;          // 最低票价
   seatTypes?: string;     // 可选座位类型 "二等座¥780,一等座¥1250"
   // 其他
-  note?: string;          // 备注
+  note?: string;          // 备注(余票状态等)
 }
 
 export class TransportSearchService {
@@ -46,35 +47,193 @@ export class TransportSearchService {
     return TransportSearchService.instance;
   }
 
-  /** 搜索火车票 */
-  async searchTrains(from: string, to: string, date: string): Promise<TicketOption[]> {
-    if (!JUHE_KEY || JUHE_KEY.length === 0) {
-      Logger.warn(TAG, 'Juhe API key not configured');
+  /** 搜索火车票 — 12306 queryG API（免费，返回当天全部车次 + 余票）
+   *  端点: kyfw.12306.cn/otn/leftTicket/queryG */
+  async searchTrainsVia12306(fromCity: string, toCity: string, date: string): Promise<TicketOption[]> {
+    // 12306 必须传日期 — 未指定时默认今天
+    const queryDate: string = date && date.length > 0 ? date : this.todayStr();
+    if (!queryDate) {
+      Logger.warn(TAG, '12306: cannot determine date');
       return [];
     }
-    const url: string =
-      `https://apis.juhe.cn/train/ticket?key=${JUHE_KEY}` +
-      `&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}` +
-      `&date=${encodeURIComponent(date)}`;
 
-    try {
-      const bridge: PlatformBridge = PlatformBridge.getInstance();
-      const resp = await bridge.network.request(url, { method: 'GET' });
-      if (resp.responseCode === 200 && resp.result) {
-        const json = JSON.parse(resp.result) as Record<string, Object>;
-        Logger.info(TAG, 'Train API response: %{public}s', resp.result.substring(0, 300));
-        if ((json['error_code'] as number) === 0 && json['result']) {
-          const result = json['result'] as Record<string, Object>;
-          const list: Object[] = (result['list'] as Object[]) ?? (result['data'] as Object[]) ?? [];
-          return this.parseJuheTrainList(list);
-        } else {
-          Logger.warn(TAG, 'Train API error: %{public}s', json['reason'] as string ?? 'unknown');
+    const stnService: StationCodeService = StationCodeService.getInstance();
+    const fromCodes: string[] = await stnService.getStationCodes(fromCity);
+    const toCodes: string[] = await stnService.getStationCodes(toCity);
+
+    if (fromCodes.length === 0 || toCodes.length === 0) {
+      Logger.warn(TAG, '12306: no station codes for %{public}s→%{public}s', fromCity, toCity);
+      return [];
+    }
+
+    // 每个站对独立会话，init+queryG 在同一个 http 请求周期内完成
+    const maxFrom: number = Math.min(3, fromCodes.length);
+    const maxTo: number = Math.min(3, toCodes.length);
+    const allOptions: TicketOption[] = [];
+    const seenTrips: Set<string> = new Set();
+
+    for (let fi: number = 0; fi < maxFrom; fi++) {
+      for (let ti: number = 0; ti < maxTo; ti++) {
+        const fromCode: string = fromCodes[fi];
+        const toCode: string = toCodes[ti];
+        if (fromCode === toCode) continue;
+
+        try {
+          const options: TicketOption[] = await this.query12306(fromCode, toCode, queryDate);
+          for (const o of options) {
+            const key: string = `${o.tripNo}|${o.fromStation}|${o.toStation}`;
+            if (!seenTrips.has(key)) {
+              seenTrips.add(key);
+              allOptions.push(o);
+            }
+          }
+        } catch (e) {
+          Logger.warn(TAG, '12306 query failed %{public}s→%{public}s', fromCode, toCode);
         }
       }
-    } catch (e) {
-      Logger.warn(TAG, 'Train search failed: %{public}s', JSON.stringify(e));
     }
-    return [];
+
+    // 按出发时间排序
+    allOptions.sort((a: TicketOption, b: TicketOption): number => {
+      if (a.departureTime && b.departureTime) {
+        return a.departureTime.localeCompare(b.departureTime);
+      }
+      return 0;
+    });
+
+    Logger.info(TAG, '12306: %{public}s→%{public}s = %{public}d trains',
+      fromCity, toCity, allOptions.length);
+    return allOptions;
+  }
+
+  /** 调用 12306 queryG — init+查询在同一 http 会话内完成，Cookie 自动保持 */
+  private async query12306(fromCode: string, toCode: string, date: string): Promise<TicketOption[]> {
+    const req: http.HttpRequest = http.createHttp();
+    try {
+      // Step 1: 访问 init 页面建立 Cookie 会话
+      await req.request('https://kyfw.12306.cn/otn/leftTicket/init', {
+        method: http.RequestMethod.GET,
+        header: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept-Language': 'zh-CN,zh;q=0.9',
+        },
+        connectTimeout: 15000,
+        readTimeout: 20000,
+      } as http.HttpRequestOptions);
+
+      // Step 2: 用同一会话查 queryG（Cookie 自动带上）
+      const url: string =
+        'https://kyfw.12306.cn/otn/leftTicket/queryG' +
+        `?leftTicketDTO.train_date=${encodeURIComponent(date)}` +
+        `&leftTicketDTO.from_station=${encodeURIComponent(fromCode)}` +
+        `&leftTicketDTO.to_station=${encodeURIComponent(toCode)}` +
+        '&purpose_codes=ADULT';
+
+      const resp: http.HttpResponse = await req.request(url, {
+        method: http.RequestMethod.GET,
+        header: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/json, text/javascript',
+          'Referer': 'https://kyfw.12306.cn/otn/leftTicket/init',
+          'Accept-Language': 'zh-CN,zh;q=0.9',
+        },
+        connectTimeout: 15000,
+        readTimeout: 20000,
+      } as http.HttpRequestOptions);
+
+      if (resp.responseCode !== 200 || !resp.result) {
+        throw new Error(`HTTP ${resp.responseCode}`);
+      }
+
+      const resultStr: string = typeof resp.result === 'string' ? resp.result : JSON.stringify(resp.result);
+      const json: Record<string, Object> = JSON.parse(resultStr) as Record<string, Object>;
+      const httpstatus: number = (json['httpstatus'] as number) ?? 200;
+      if (httpstatus !== 200) {
+        throw new Error(`12306 httpstatus: ${httpstatus}`);
+      }
+
+      const data: Record<string, Object> = json['data'] as Record<string, Object>;
+      let resultArr: string[] = (data?.['result'] as string[]) ?? [];
+
+      if (resultArr.length === 0) {
+        Logger.warn(TAG, '12306 returned 0 results');
+      }
+
+      return this.parse12306Result(resultArr, fromCode, toCode);
+    } finally {
+      req.destroy();
+    }
+  }
+
+  /**
+   * 解析 12306 queryG 返回的 result 数组（字段按|分隔）
+   * queryG 格式:
+   *   [0]=加密数据 [1]="预订" [2]=ID [3]=车次号
+   *   [4]=出发站码 [5]=到达站码 [8]=出发时间(HH:mm)
+   *   [9]=历时(HH:mm) [10]=到达时间 [11]=有票标记(Y/N)
+   *   价格在末尾加密段，不可直接解析
+   */
+  private parse12306Result(resultArr: string[], fromCode: string, toCode: string): TicketOption[] {
+    const options: TicketOption[] = [];
+
+    for (const line of resultArr) {
+      if (!line || line.length === 0) continue;
+      const parts: string[] = line.split('|');
+      if (parts.length < 12) continue;
+
+      const tripNo: string = parts[3] || '';
+      if (!tripNo) continue;
+
+      // 电报码 → 中文站名
+      const codeService: StationCodeService = StationCodeService.getInstance();
+      const depStation: string = codeService.getStationName(parts[4]) || parts[4] || fromCode;
+      const arrStation: string = codeService.getStationName(parts[5]) || parts[5] || toCode;
+      const depTime: string = parts[8] || '';
+      const durationStr: string = parts[9] || ''; // "07:55"
+      const arrTime: string = parts[10] || '';
+      const hasTicket: string = parts[11] || '';
+
+      let mode: string = 'train';
+      const upper: string = tripNo.toUpperCase();
+      if (upper.startsWith('G') || upper.startsWith('D') || upper.startsWith('C')) {
+        mode = 'high_speed_rail';
+      }
+
+      let duration: number = 0;
+      const durMatch: RegExpMatchArray | null = durationStr.match(/(\d{2}):(\d{2})/);
+      if (durMatch) {
+        duration = parseInt(durMatch[1]) * 3600 + parseInt(durMatch[2]) * 60;
+      }
+
+      let note: string = '';
+      if (hasTicket === 'Y') note = '有票';
+      else if (hasTicket === 'N') note = '无票';
+      else note = hasTicket || '';
+
+      options.push({
+        type: mode,
+        tripNo: tripNo,
+        fromStation: depStation,
+        toStation: arrStation,
+        departureTime: depTime,
+        arrivalTime: arrTime,
+        duration: duration,
+        price: 0,
+        seatTypes: '',
+        note: note,
+      } as TicketOption);
+    }
+
+    return options;
+  }
+
+  /** 从 12306 字段中解析价格（可能带 '¥' 前缀） */
+  private parsePrice(parts: string[], idx: number): number {
+    if (idx >= parts.length) return 0;
+    const raw: string = parts[idx] || '';
+    if (!raw) return 0;
+    const num: number = parseFloat(raw.replace('¥', ''));
+    return isNaN(num) ? 0 : num;
   }
 
   /** 搜索机票 — WebXml 免费接口 (非商用) */
@@ -89,10 +248,7 @@ export class TransportSearchService {
       const bridge: PlatformBridge = PlatformBridge.getInstance();
       const resp = await bridge.network.request(url, { method: 'GET' });
       if (resp.responseCode === 200 && resp.result) {
-        Logger.info(TAG, 'Flight API response: %{public}s', resp.result.substring(0, 300));
-        // WebXml 返回 XML 格式
-        const xml = resp.result;
-        return this.parseWebXmlFlightXml(xml);
+        return this.parseWebXmlFlightXml(resp.result);
       }
     } catch (e) {
       Logger.warn(TAG, 'WebXml flight search failed: %{public}s', JSON.stringify(e));
@@ -114,74 +270,36 @@ export class TransportSearchService {
     return [];
   }
 
-  /** 统一搜索：火车(聚合数据) + 飞机(WebXml免费) */
+  /** 统一搜索：火车(12306) + 飞机(WebXml免费) */
   async searchAll(from: string, to: string, date: string): Promise<TicketOption[]> {
     const results: TicketOption[] = [];
-    // 火车：需要聚合数据 Key
-    if (JUHE_KEY && JUHE_KEY.length > 0) {
-      try {
-        const trains = await this.searchTrains(from, to, date);
-        for (const t of trains) results.push(t);
-      } catch (_e) { /* ignore */ }
-    }
-    // 飞机：WebXml 免费，无需 Key
+    // 火车：12306 官方 API — 当天全部车次
     try {
-      const flights = await this.searchFlights(from, to, date);
+      const trains: TicketOption[] = await this.searchTrainsVia12306(from, to, date);
+      for (const t of trains) results.push(t);
+    } catch (_e) { /* ignore */ }
+    // 飞机：WebXml 免费接口
+    try {
+      const flights: TicketOption[] = await this.searchFlights(from, to, date);
       for (const f of flights) results.push(f);
     } catch (_e) { /* ignore */ }
     return results;
   }
 
-  // ─── 解析聚合数据火车票响应 ───
-
-  private parseJuheTrainList(list: Object[]): TicketOption[] {
-    const options: TicketOption[] = [];
-    for (let i: number = 0; i < list.length; i++) {
-      const item = list[i] as Record<string, Object>;
-      // 聚合数据火车票字段（常见格式）
-      const trainNo: string = (item['train_no'] as string) || (item['station_train_code'] as string) ||
-        (item['trainCode'] as string) || '';
-      const fromSt: string = (item['from_station'] as string) || (item['start_station_name'] as string) ||
-        (item['fromStation'] as string) || '';
-      const toSt: string = (item['to_station'] as string) || (item['end_station_name'] as string) ||
-        (item['toStation'] as string) || '';
-      const startTime: string = (item['start_time'] as string) || (item['departure_time'] as string) ||
-        (item['startTime'] as string) || '';
-      const arriveTime: string = (item['arrive_time'] as string) || (item['arrival_time'] as string) ||
-        (item['endTime'] as string) || '';
-      const duration: number = this.parseJuheDuration(item);
-      const typeStr: string = (item['train_type'] as string) || (item['type'] as string) || '';
-      const price: number = this.parseJuhePrice(item);
-
-      let mode: string = 'train';
-      if (trainNo.startsWith('G') || typeStr.includes('高铁')) mode = 'high_speed_rail';
-      else if (trainNo.startsWith('D') || typeStr.includes('动车')) mode = 'high_speed_rail';
-      else if (trainNo.startsWith('C')) mode = 'high_speed_rail';
-      else if (trainNo.startsWith('K') || trainNo.startsWith('T') || trainNo.startsWith('Z')) mode = 'train';
-
-      if (trainNo || (fromSt && toSt)) {
-        options.push({
-          type: mode,
-          tripNo: trainNo || typeStr,
-          fromStation: fromSt,
-          toStation: toSt,
-          departureTime: startTime,
-          arrivalTime: arriveTime,
-          duration: duration,
-          price: price,
-          seatTypes: this.buildSeatTypes(item),
-        } as TicketOption);
-      }
-    }
-    return options;
+  /** 获取今天的日期字符串 YYYY-MM-DD */
+  private todayStr(): string {
+    const d: Date = new Date();
+    const y: number = d.getFullYear();
+    const m: string = String(d.getMonth() + 1).padStart(2, '0');
+    const day: string = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
   }
 
   // ─── 解析 WebXml 航班 XML ───
 
   private parseWebXmlFlightXml(xml: string): TicketOption[] {
     const options: TicketOption[] = [];
-    // WebXml 返回格式: <DomesticAirline>...</DomesticAirline>
-    const flightRegex = /<DomesticAirline>([\s\S]*?)<\/DomesticAirline>/g;
+    const flightRegex: RegExp = /<DomesticAirline>([\s\S]*?)<\/DomesticAirline>/g;
     let match: RegExpExecArray | null;
     while ((match = flightRegex.exec(xml)) !== null) {
       const block: string = match[1];
@@ -206,8 +324,8 @@ export class TransportSearchService {
           toStation: lastAirport || lastCity,
           departureTime: startTime,
           arrivalTime: lastTime,
-          duration: 0, // WebXml 不直接给时长
-          price: 0,     // WebXml 不提供票价
+          duration: 0,
+          price: 0,
           note: airline,
         } as TicketOption);
       }
@@ -216,101 +334,4 @@ export class TransportSearchService {
     return options;
   }
 
-  // ─── 旧版：解析聚合数据机票响应（保留备用）───
-
-  private parseJuheFlightList(list: Object[]): TicketOption[] {
-    const options: TicketOption[] = [];
-    for (let i: number = 0; i < list.length; i++) {
-      const item = list[i] as Record<string, Object>;
-      const flightNo: string = (item['flight_no'] as string) || (item['flightNo'] as string) ||
-        (item['flight_code'] as string) || '';
-      const depAirport: string = (item['dep_airport'] as string) || (item['fromAirport'] as string) ||
-        (item['depAirport'] as string) || '';
-      const arrAirport: string = (item['arr_airport'] as string) || (item['toAirport'] as string) ||
-        (item['arrAirport'] as string) || '';
-      const depTime: string = (item['dep_time'] as string) || (item['departureTime'] as string) ||
-        (item['startTime'] as string) || '';
-      const arrTime: string = (item['arr_time'] as string) || (item['arrivalTime'] as string) ||
-        (item['endTime'] as string) || '';
-      const duration: number = this.parseJuheDuration(item);
-      const price: number = this.parseJuhePrice(item);
-      const company: string = (item['airline_company'] as string) || (item['company'] as string) || '';
-
-      if (flightNo || (depAirport && arrAirport)) {
-        options.push({
-          type: 'flight',
-          tripNo: flightNo || company,
-          fromStation: depAirport,
-          toStation: arrAirport,
-          departureTime: depTime,
-          arrivalTime: arrTime,
-          duration: duration,
-          price: price,
-          note: company,
-        } as TicketOption);
-      }
-    }
-    return options;
-  }
-
-  // ─── 辅助 ───
-
-  private parseJuheDuration(item: Record<string, Object>): number {
-    // 尝试多种格式："3h30m" / "210" (分钟) / "12600" (秒)
-    const durStr: string = (item['duration'] as string) || (item['run_time'] as string) ||
-      (item['lishi'] as string) || '';
-    if (durStr) {
-      const hMatch = durStr.match(/(\d+)\s*[h时]/);
-      const mMatch = durStr.match(/(\d+)\s*[m分]/);
-      let secs: number = 0;
-      if (hMatch) secs += parseInt(hMatch[1]) * 3600;
-      if (mMatch) secs += parseInt(mMatch[1]) * 60;
-      if (secs > 0) return secs;
-      // 纯数字可能是分钟
-      const num = parseInt(durStr);
-      if (!isNaN(num)) {
-        if (num < 100) return num * 3600;       // "3" → 3小时
-        if (num < 1000) return num * 60;         // "210" → 210分钟
-        return num;                                 // 已经是秒
-      }
-    }
-    return 0;
-  }
-
-  private parseJuhePrice(item: Record<string, Object>): number {
-    // 尝试多种价格字段
-    const candidates = [
-      item['price'], item['ticket_price'], item['min_price'],
-      item['gr_price'], item['qt_price'],  // 高级软卧/其他
-      item['swz_price'], item['tz_price'], item['zy_price'], item['ze_price'], // 商务座/特等座/一等座/二等座
-      item['yw_price'], item['rw_price'], item['yz_price'], item['rz_price'], // 硬卧/软卧/硬座/软座
-      item['wz_price'], // 无座
-    ];
-    for (const c of candidates) {
-      if (c !== undefined && c !== null) {
-        const num = typeof c === 'string' ? parseFloat(c) : (c as number);
-        if (!isNaN(num) && num > 0) return num;
-      }
-    }
-    return 0;
-  }
-
-  private buildSeatTypes(item: Record<string, Object>): string {
-    const parts: string[] = [];
-    const seatMap: Record<string, string> = {
-      'swz_price': '商务座', 'tz_price': '特等座', 'zy_price': '一等座', 'ze_price': '二等座',
-      'yw_price': '硬卧', 'rw_price': '软卧', 'yz_price': '硬座', 'rz_price': '软座',
-      'wz_price': '无座', 'gr_price': '高级软卧', 'qt_price': '其他',
-    };
-    for (const key of Object.keys(seatMap)) {
-      const val = item[key];
-      if (val !== undefined && val !== null) {
-        const num = typeof val === 'string' ? parseFloat(val) : (val as number);
-        if (!isNaN(num) && num > 0) {
-          parts.push(seatMap[key] + '¥' + num);
-        }
-      }
-    }
-    return parts.join(', ');
-  }
 }

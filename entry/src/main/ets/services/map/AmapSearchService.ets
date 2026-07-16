@@ -640,17 +640,25 @@ export class AmapSearchService {
           `&extensions=all`;
         if (date && date.length > 0) tryUrl += `&date=${encodeURIComponent(date)}`;
 
-        try {
-          const bridge: PlatformBridge = PlatformBridge.getInstance();
-          const resp = await bridge.network.request(tryUrl, { method: 'GET' });
-          if (resp.responseCode !== 200 || !resp.result) continue;
-          const json = JSON.parse(resp.result) as Record<string, Object>;
-          if ((json['status'] as string) !== '1') {
-            continue;
-          }
-          const routeData = json['route'] as Record<string, Object>;
-          const transits: Object[] = (routeData?.['transits'] as Object[]) ?? [];
-          Logger.info(TAG, 'Transit %{public}s→%{public}s: %{public}d transits', cf, ct, transits.length);
+        // 最多重试3次（网络波动容错）
+        let lastErr: string = '';
+        for (let retry: number = 0; retry < 3; retry++) {
+          try {
+            const bridge: PlatformBridge = PlatformBridge.getInstance();
+            const resp = await bridge.network.request(tryUrl, { method: 'GET' });
+            if (resp.responseCode !== 200 || !resp.result) {
+              lastErr = `HTTP ${resp.responseCode}`;
+              if (retry < 2) await new Promise<void>((r) => setTimeout(r, 600));
+              continue;
+            }
+            const json = JSON.parse(resp.result) as Record<string, Object>;
+            if ((json['status'] as string) !== '1') {
+              lastErr = `status=${json['status']}`;
+              continue; // API 返回错误不重试（非网络问题）
+            }
+            const routeData = json['route'] as Record<string, Object>;
+            const transits: Object[] = (routeData?.['transits'] as Object[]) ?? [];
+            Logger.info(TAG, 'Transit %{public}s→%{public}s: %{public}d transits', cf, ct, transits.length);
 
           const options: IntercityTransportOption[] = [];
           for (let t: number = 0; t < transits.length; t++) {
@@ -692,6 +700,8 @@ export class AmapSearchService {
 
               const fmtTm = (raw: string): string => {
                 if (!raw) return '';
+                // 已经是 "HH:mm" 或 "HH:mm:ss" 格式 → 直接返回
+                if (raw.includes(':')) return raw.split(' ')[0]; // 去掉可能的日期前缀
                 let n = parseInt(raw);
                 if (isNaN(n)) return raw;
                 if (n >= 2400) n -= 2400;
@@ -735,15 +745,21 @@ export class AmapSearchService {
           }
 
           // 合并去重（按车次）
-          for (const opt of options) {
-            let dup: boolean = false;
-            for (const existing of allOptions) {
-              if (existing.trip && opt.trip && existing.trip === opt.trip) { dup = true; break; }
+            for (const opt of options) {
+              let dup: boolean = false;
+              for (const existing of allOptions) {
+                if (existing.trip && opt.trip && existing.trip === opt.trip) { dup = true; break; }
+              }
+              if (!dup) allOptions.push(opt);
             }
-            if (!dup) allOptions.push(opt);
+            break; // 成功 → 跳出重试循环
+          } catch (e) {
+            lastErr = JSON.stringify(e);
+            if (retry < 2) await new Promise<void>((r) => setTimeout(r, 600));
           }
-        } catch (e) {
-          Logger.warn(TAG, 'Transit request failed %{public}s→%{public}s', cf, ct);
+        } // retry loop
+        if (lastErr && allOptions.length === 0) {
+          Logger.warn(TAG, 'Transit request failed %{public}s→%{public}s: %{public}s', cf, ct, lastErr);
         }
       } // ct
     } // cf
