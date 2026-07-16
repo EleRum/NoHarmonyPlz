@@ -1035,8 +1035,8 @@ export class TourGuideAgent {
             allOptions.push(opt);
           }
         };
+        for (const o of webXmlOptions) addOpt(o);  // 12306 优先，有价格
         for (const o of amapResults) addOpt(o);
-        for (const o of webXmlOptions) addOpt(o);
 
         if (allOptions.length > 0) {
           transportOptions = allOptions;

@@ -18,6 +18,17 @@ export interface TicketQueryParams {
   type?: string;     // train / flight
 }
 
+/** 12306 价格（从 queryAllPublicPrice API） */
+interface TicketPrice {
+  ze?: number;   // 二等座
+  zy?: number;   // 一等座
+  swz?: number;  // 商务座
+  yz?: number;   // 硬座
+  yw?: number;   // 硬卧
+  rw?: number;   // 软卧
+  wz?: number;   // 无座
+}
+
 /** 票务结果（统一格式，供 UI 展示） */
 export interface TicketOption {
   // 基础信息
@@ -93,6 +104,30 @@ export class TransportSearchService {
       }
     }
 
+    // 查询价格（独立 API，和车次搜索需要同一个 session）
+    if (allOptions.length > 0) {
+      try {
+        const priceMap: Record<string, TicketPrice> = await this.query12306Prices(fromCodes[0], toCodes[0], queryDate);
+        for (const opt of allOptions) {
+          const p: TicketPrice | undefined = priceMap[opt.tripNo];
+          if (p) {
+            opt.price = p.ze || p.yz || p.yw || 0; // 最低价
+            const seatParts: string[] = [];
+            if (p.swz && p.swz > 0) seatParts.push('商务座¥' + p.swz.toFixed(1));
+            if (p.zy && p.zy > 0) seatParts.push('一等座¥' + p.zy.toFixed(1));
+            if (p.ze && p.ze > 0) seatParts.push('二等座¥' + p.ze.toFixed(1));
+            if (p.yw && p.yw > 0) seatParts.push('硬卧¥' + p.yw.toFixed(1));
+            if (p.rw && p.rw > 0) seatParts.push('软卧¥' + p.rw.toFixed(1));
+            if (p.yz && p.yz > 0) seatParts.push('硬座¥' + p.yz.toFixed(1));
+            if (p.wz && p.wz > 0) seatParts.push('无座¥' + p.wz.toFixed(1));
+            opt.seatTypes = seatParts.join(', ');
+          }
+        }
+      } catch (e) {
+        Logger.warn(TAG, 'Price query failed: %{public}s', JSON.stringify(e));
+      }
+    }
+
     // 按出发时间排序
     allOptions.sort((a: TicketOption, b: TicketOption): number => {
       if (a.departureTime && b.departureTime) {
@@ -165,13 +200,81 @@ export class TransportSearchService {
     }
   }
 
+  /** 查询 12306 票价（独立 API: queryAllPublicPrice）。价格格式: 整数/10=元 */
+  private async query12306Prices(fromCode: string, toCode: string, date: string):
+    Promise<Record<string, TicketPrice>> {
+    const req: http.HttpRequest = http.createHttp();
+    try {
+      await req.request('https://kyfw.12306.cn/otn/leftTicket/init', {
+        method: http.RequestMethod.GET,
+        header: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept-Language': 'zh-CN,zh;q=0.9',
+        },
+        connectTimeout: 15000, readTimeout: 20000,
+      } as http.HttpRequestOptions);
+
+      const url: string =
+        'https://kyfw.12306.cn/otn/leftTicketPrice/queryAllPublicPrice' +
+        `?leftTicketDTO.train_date=${encodeURIComponent(date)}` +
+        `&leftTicketDTO.from_station=${encodeURIComponent(fromCode)}` +
+        `&leftTicketDTO.to_station=${encodeURIComponent(toCode)}` +
+        '&purpose_codes=ADULT';
+
+      const resp: http.HttpResponse = await req.request(url, {
+        method: http.RequestMethod.GET,
+        header: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/json',
+          'Referer': 'https://kyfw.12306.cn/otn/leftTicket/init',
+          'Accept-Language': 'zh-CN,zh;q=0.9',
+        },
+        connectTimeout: 15000, readTimeout: 20000,
+      } as http.HttpRequestOptions);
+
+      if (resp.responseCode !== 200 || !resp.result) return {};
+
+      const resultStr: string = typeof resp.result === 'string' ? resp.result : JSON.stringify(resp.result);
+      const json: Record<string, Object> = JSON.parse(resultStr) as Record<string, Object>;
+      const dataArr: Object[] = (json['data'] as Object[]) ?? [];
+      const map: Record<string, TicketPrice> = {};
+
+      for (const item of dataArr) {
+        const dto: Record<string, Object> = (item as Record<string, Object>)['queryLeftNewDTO'] as Record<string, Object>;
+        if (!dto) continue;
+        const trainCode: string = (dto['station_train_code'] as string) || '';
+        if (!trainCode) continue;
+        map[trainCode] = {
+          ze: this.parsePriceField(dto['ze_price'] as string),
+          zy: this.parsePriceField(dto['zy_price'] as string),
+          swz: this.parsePriceField(dto['swz_price'] as string),
+          yz: this.parsePriceField(dto['yz_price'] as string),
+          yw: this.parsePriceField(dto['yw_price'] as string),
+          rw: this.parsePriceField(dto['rw_price'] as string),
+          wz: this.parsePriceField(dto['wz_price'] as string),
+        };
+      }
+      Logger.info(TAG, 'Price query: %{public}d trains', Object.keys(map).length);
+      return map;
+    } finally {
+      req.destroy();
+    }
+  }
+
+  /** 解析价格字段: 12306 单位 0.1元 → "09340" = 934.0 */
+  private parsePriceField(raw: string | undefined): number | undefined {
+    if (!raw || raw === '--' || raw === '无' || raw.length === 0) return undefined;
+    const n: number = parseFloat(raw);
+    if (isNaN(n) || n <= 0) return undefined;
+    return n / 10;
+  }
+
   /**
    * 解析 12306 queryG 返回的 result 数组（字段按|分隔）
    * queryG 格式:
    *   [0]=加密数据 [1]="预订" [2]=ID [3]=车次号
-   *   [4]=出发站码 [5]=到达站码 [8]=出发时间(HH:mm)
-   *   [9]=历时(HH:mm) [10]=到达时间 [11]=有票标记(Y/N)
-   *   价格在末尾加密段，不可直接解析
+   *   [6]=出发站码 [7]=到达站码 [8]=出发时间
+   *   [9]=到达时间 [10]=历时 [11]=有票标记(Y/N)
    */
   private parse12306Result(resultArr: string[], fromCode: string, toCode: string): TicketOption[] {
     const options: TicketOption[] = [];
@@ -186,11 +289,12 @@ export class TransportSearchService {
 
       // 电报码 → 中文站名
       const codeService: StationCodeService = StationCodeService.getInstance();
-      const depStation: string = codeService.getStationName(parts[4]) || parts[4] || fromCode;
-      const arrStation: string = codeService.getStationName(parts[5]) || parts[5] || toCode;
+      // [6][7]=本次查询的上/下车站码, [8]=出发, [9]=到达, [10]=历时
+      const depStation: string = codeService.getStationName(parts[6]) || parts[6] || fromCode;
+      const arrStation: string = codeService.getStationName(parts[7]) || parts[7] || toCode;
       const depTime: string = parts[8] || '';
-      const durationStr: string = parts[9] || ''; // "07:55"
-      const arrTime: string = parts[10] || '';
+      const arrTime: string = parts[9] || '';
+      const durationStr: string = parts[10] || '';
       const hasTicket: string = parts[11] || '';
 
       let mode: string = 'train';
