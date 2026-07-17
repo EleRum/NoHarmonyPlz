@@ -37,11 +37,25 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
 5. 计划创建后 → 等用户指定景点 → search_and_add
 6. 用户说调整起止时间 → set_day_bounds
 
-## 工具调用格式
-回复末尾加 ---JSON---，可一次调用多个工具（数组格式）：
+## 工具调用格式（不按此格式系统无法识别！）
+**回复末尾必须严格按以下格式：**
 ---JSON---
-{"action":"geocode_city","city":"成都"}
-[{"action":"geocode_city","city":"成都"},{"action":"search_transport","from":"北京","to":"成都","date":"7月20日"}]
+{"action":"xxx","param":"value"}
+
+或数组（多个工具并行）：
+---JSON---
+[{"action":"xxx"},{"action":"yyy"}]
+
+**格式要求：**
+- ---JSON--- 前后各空一行
+- JSON 必须合法（双引号、无尾逗号）
+- JSON 必须在最后，后面不能再有文字
+- 错误示例: ---JSON---（缺空行） {"action":"xx",}（尾逗号）
+- 正确示例: 你的回复文字...
+          ---JSON---
+          {"action":"geocode_city","city":"成都"}
+
+- **如果你回复了文字但没带 ---JSON---，对话就卡住了！必须步步带工具！**
 
 ## 规则（必须遵守！）
 - **最重要的规则：每次回复末尾都必须带 ---JSON--- 工具调用！**
@@ -68,13 +82,20 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
 - 用户没提 → 不问不搜
 - 选定后全程住同一家
 
-## 跨城交通
-- 出发地+目的地已知 → **去程和返程一起查！**两个方向并行调用 search_transport
-  * 去程: {"action":"search_transport","from":"北京","to":"成都"}
-  * 返程: {"action":"search_transport","from":"成都","to":"北京"}
-- 没日期 → 系统默认5天后（返程日期 = 去程日期 + 游玩天数），不用问
-- 用户选定方案 → set_transport 分别记录去程和返程
+## 跨城交通（严格分两步！禁止同时搜去程和返程！）
+**第一步 — 只查去程：**
+- 出发地+目的地已知 → search_transport 查去程
+- 展示去程方案 → 等用户选定 → set_transport 记录去程
+**第二步 — 才查返程（去程选定之后！）：**
+- 去程选好后 → 问"哪天返程？"→ 等用户答 → search_transport 查返程
+- **返程一定要等用户选定去程之后再调！否则选项列表会被覆盖！**
+- 返程: {"action":"search_transport","from":"成都","to":"北京","date":"7月25日"}
+- 展示返程方案 → 等用户选定 → set_transport 记录返程
+**规则：**
+- 没日期 → 系统默认5天后
 - 禁止编造车次/时间/价格！
+- **禁止去程和返程放在同一个数组里并行调用！**
+- **交通搜索结果里有🔍12306诊断时，你的回复第一行必须原样照抄诊断，一字不改！**
 
 ## 本地人模式
 - 目的地 = 用户常住城市 → 无跨城交通、无酒店
@@ -483,16 +504,12 @@ export class TourGuideAgent {
       collected.push(geocodeIntent);
     }
 
-    // ── 2. 收集跨城交通意图（去程+返程一起查） ──
+    // ── 2. 收集跨城交通意图 ──
     const transportIntent: ToolCall | undefined = this.detectTransportIntent(input);
     if (transportIntent) {
       Logger.info(TAG, 'Transport intent detected: %{public}s→%{public}s',
         transportIntent.from ?? '', transportIntent.to ?? '');
       collected.push(transportIntent);
-      // 自动补返程：交换 from/to
-      const backIntent: ToolCall = { action: 'search_transport', from: transportIntent.to, to: transportIntent.from };
-      if (transportIntent.date) backIntent.date = transportIntent.date;
-      collected.push(backIntent);
     }
 
     // ── 3. 隐式交通：有目的地 + "从X出发/来/走" → 自动补交通搜索 ──
@@ -1048,9 +1065,9 @@ export class TourGuideAgent {
         const amapPromise = AmapSearchService.getInstance()
           .searchIntercityTransport(stFrom, stTo, normalizedDate || undefined);
 
-        // 12306 查询加 45 秒超时保护
+        // 12306 查询加 60 秒超时保护（TLS握手可能需要较长时间）
         const trainTimeout = new Promise<TransportTicketOption[]>((_, reject) =>
-          setTimeout(() => reject(new Error('timeout')), 45000));
+          setTimeout(() => reject(new Error('timeout')), 60000));
         let webXmlResults: TransportTicketOption[] = [];
         let trainDiag: string = '';
         try {
@@ -1060,23 +1077,29 @@ export class TourGuideAgent {
           ]);
         } catch (e) {
           const errMsg: string = JSON.stringify(e);
-          trainDiag = errMsg.includes('timeout') ? '12306 查询超时(45s)' : '12306 异常: ' + errMsg;
+          if (errMsg.includes('timeout')) {
+            trainDiag = '[超时] Promise.race 45s超时，12306未响应';
+          } else {
+            trainDiag = '[异常] ' + errMsg.substring(0, 80);
+          }
           Logger.warn(TAG, '12306 failed: %{public}s', trainDiag);
         }
 
         // 等高德结果
         const amapResults = await amapPromise;
 
-        // 诊断 12306 失败原因
-        if (webXmlResults.length === 0 && !trainDiag) {
+        const svcDiag: string = TransportSearchService.getInstance().lastDiag;
+        if (svcDiag && !trainDiag) {
+          trainDiag = svcDiag;
+        } else if (!trainDiag) {
           const fromCodes: string[] = StationCodeService.getInstance().getStationCodes(stFrom);
           const toCodes: string[] = StationCodeService.getInstance().getStationCodes(stTo);
           const diagParts: string[] = [];
-          if (fromCodes.length === 0) diagParts.push('出发城市未匹配车站代码');
-          if (toCodes.length === 0) diagParts.push('到达城市未匹配车站代码');
-          if (fromCodes.length > 0 && toCodes.length > 0) diagParts.push('queryG 返回空(无车次或被拦截)');
-          if (!normalizedDate) diagParts.push('日期无法解析');
-          trainDiag = diagParts.length > 0 ? diagParts.join(' | ') : '未知原因';
+          if (fromCodes.length === 0) diagParts.push('[车站] 出发城市未匹配');
+          if (toCodes.length === 0) diagParts.push('[车站] 到达城市未匹配');
+          if (fromCodes.length > 0 && toCodes.length > 0) diagParts.push('[queryG] 返回空(无车次/被拦截)');
+          if (!normalizedDate) diagParts.push('[日期] 无法解析');
+          trainDiag = diagParts.length > 0 ? diagParts.join(' | ') : '';
         }
 
         // 12306 → 统一格式
@@ -1120,13 +1143,14 @@ export class TourGuideAgent {
             return `${i + 1}. ${getTransportEmoji(o.type)} ${o.trip || getTransportLabel(o.type)} ${o.fromStation}${o.departureTime ? ' ' + o.departureTime : ''}→${o.toStation}${o.arrivalTime ? ' ' + o.arrivalTime : ''}${priceStr}`;
           }).join('\n');
 
-          const srcNote: string = has12306 ? '（12306实时数据）' : '（高德方案，建议到12306确认）';
-          const diagNote: string = (!has12306 && trainDiag) ? '\n🔍 12306诊断：' + trainDiag : '';
-          resultText = `${stFrom}→${stTo}${stDate ? '（' + stDate + '）' : ''}查到${allOptions.length}个方案${srcNote}：\n${detailsStr}${diagNote}`;
-          Logger.info(TAG, 'Transport: %{public}d options (%{public}d 12306 + %{public}d Amap)',
-            allOptions.length, webXmlOptions.length, amapResults.length);
+          const diagPrefix: string = trainDiag ? '🔍' + trainDiag + '\n\n' : '';
+          const srcNote: string = has12306 ? '（12306实时数据）' : '（高德方案）';
+          resultText = diagPrefix + `${stFrom}→${stTo}${stDate ? '（' + stDate + '）' : ''}查到${allOptions.length}个方案${srcNote}：\n${detailsStr}`;
+          Logger.info(TAG, 'Transport: %{public}d options (%{public}d 12306 + %{public}d Amap) diag=%{public}s',
+            allOptions.length, webXmlOptions.length, amapResults.length, trainDiag || 'none');
         } else {
-          resultText = `暂未查到${stFrom}到${stTo}${stDate ? '（' + stDate + '）' : ''}的实时方案。建议到12306或携程App查询。`;
+          const diagLine: string = trainDiag ? '🔍' + trainDiag + '\n' : '';
+          resultText = diagLine + `暂未查到${stFrom}到${stTo}${stDate ? '（' + stDate + '）' : ''}的实时方案。`;
           Logger.info(TAG, 'Transport: no results for %{public}s→%{public}s', stFrom, stTo);
         }
         markers = undefined;
@@ -1524,7 +1548,16 @@ export class TourGuideAgent {
       nextTools = this.parseToolCalls(retryText);
       return { text: this.stripJson(retryText || resultText2), toolCalls: nextTools };
     }
-    return { text: this.stripJson(resultText2), toolCalls: nextTools };
+    // 检查 search_transport 结果中是否有 12306 诊断，有则强行注入（绕过 AI 过滤）
+    const transportResult: ToolResult | undefined = results.find(r => r.action === 'search_transport');
+    let diagPrefix: string = '';
+    if (transportResult) {
+      const diagMatch: RegExpMatchArray | null = transportResult.text.match(/🔍(.+?)(?:\n\n|$)/);
+      if (diagMatch) {
+        diagPrefix = '🔍' + diagMatch[1].trim() + '\n\n';
+      }
+    }
+    return { text: diagPrefix + this.stripJson(resultText2), toolCalls: nextTools };
   }
 
   /** 标准化日期格式为 YYYY-MM-DD */

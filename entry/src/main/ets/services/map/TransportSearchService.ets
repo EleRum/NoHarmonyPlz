@@ -50,6 +50,8 @@ export interface TicketOption {
 
 export class TransportSearchService {
   private static instance: TransportSearchService | null = null;
+  /** 最近一次查询的诊断信息，调用方读取后自行重置 */
+  public lastDiag: string = '';
 
   static getInstance(): TransportSearchService {
     if (!TransportSearchService.instance) {
@@ -61,9 +63,11 @@ export class TransportSearchService {
   /** 搜索火车票 — 12306 queryG API（免费，返回当天全部车次 + 余票）
    *  端点: kyfw.12306.cn/otn/leftTicket/queryG */
   async searchTrainsVia12306(fromCity: string, toCity: string, date: string): Promise<TicketOption[]> {
+    this.lastDiag = '';
     // 12306 必须传日期 — 未指定时默认今天
     const queryDate: string = date && date.length > 0 ? date : this.defaultDateStr();
     if (!queryDate) {
+      this.lastDiag = '[车站] 日期无法确定';
       Logger.warn(TAG, '12306: cannot determine date');
       return [];
     }
@@ -72,8 +76,14 @@ export class TransportSearchService {
     const fromCodes: string[] = await stnService.getStationCodes(fromCity);
     const toCodes: string[] = await stnService.getStationCodes(toCity);
 
-    if (fromCodes.length === 0 || toCodes.length === 0) {
-      Logger.warn(TAG, '12306: no station codes for %{public}s→%{public}s', fromCity, toCity);
+    if (fromCodes.length === 0) {
+      this.lastDiag = '[车站] 出发城市"' + fromCity + '"未匹配到车站代码';
+      Logger.warn(TAG, '12306: no station codes for %{public}s', fromCity);
+      return [];
+    }
+    if (toCodes.length === 0) {
+      this.lastDiag = '[车站] 到达城市"' + toCity + '"未匹配到车站代码';
+      Logger.warn(TAG, '12306: no station codes for %{public}s', toCity);
       return [];
     }
 
@@ -141,18 +151,12 @@ export class TransportSearchService {
     return allOptions;
   }
 
-  /** 调用 12306 queryG — init+queryG 在同一 http 会话内，最多重试2次 */
+  /** 调用 12306 queryG — 最多重试4次，HTML拦截则延长等待 */
   private async query12306(fromCode: string, toCode: string, date: string): Promise<TicketOption[]> {
     let lastErr: string = '';
-    for (let retry: number = 0; retry < 2; retry++) {
+    for (let retry: number = 0; retry < 4; retry++) {
       const req: http.HttpRequest = http.createHttp();
       try {
-        await req.request('https://kyfw.12306.cn/otn/leftTicket/init', {
-          method: http.RequestMethod.GET,
-          header: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept-Language': 'zh-CN,zh;q=0.9' },
-          connectTimeout: 15000, readTimeout: 20000,
-        } as http.HttpRequestOptions);
-
         const url: string =
           'https://kyfw.12306.cn/otn/leftTicket/queryG' +
           `?leftTicketDTO.train_date=${encodeURIComponent(date)}` +
@@ -163,35 +167,83 @@ export class TransportSearchService {
         const resp: http.HttpResponse = await req.request(url, {
           method: http.RequestMethod.GET,
           header: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json, text/javascript',
-            'Referer': 'https://kyfw.12306.cn/otn/leftTicket/init',
-            'Accept-Language': 'zh-CN,zh;q=0.9',
+            'Host': 'kyfw.12306.cn',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Referer': 'https://www.12306.cn/',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Connection': 'keep-alive',
+            'Cache-Control': 'no-cache',
           },
-          connectTimeout: 15000, readTimeout: 20000,
+          connectTimeout: 30000, readTimeout: 20000,
         } as http.HttpRequestOptions);
 
-        if (resp.responseCode !== 200 || !resp.result) throw new Error(`HTTP ${resp.responseCode}`);
+        if (resp.responseCode !== 200 || !resp.result) {
+          throw new Error(`HTTP_${resp.responseCode}`);
+        }
 
         const resultStr: string = typeof resp.result === 'string' ? resp.result : JSON.stringify(resp.result);
+        // 12306 反爬：返回HTML而非JSON时直接判定被拦截
+        if (resultStr.trimStart().startsWith('<!') || resultStr.trimStart().startsWith('<html') ||
+            resultStr.includes('<HTML>') || resultStr.includes('<script')) {
+          throw new Error('REJECTED_HTML_NOT_JSON');
+        }
         const json: Record<string, Object> = JSON.parse(resultStr) as Record<string, Object>;
-        if (((json['httpstatus'] as number) ?? 200) !== 200) throw new Error('12306 rejected');
+        const httpstatus: number = (json['httpstatus'] as number) ?? 200;
+        if (httpstatus !== 200) {
+          throw new Error(`REJECTED_httpstatus=${httpstatus}`);
+        }
 
         const data: Record<string, Object> = json['data'] as Record<string, Object>;
         const resultArr: string[] = (data?.['result'] as string[]) ?? [];
-        if (resultArr.length === 0) Logger.warn(TAG, '12306 returned 0 results for %{public}s→%{public}s', fromCode, toCode);
+        if (resultArr.length === 0) {
+          this.lastDiag = '[queryG] ' + fromCode + '→' + toCode + ' 返回0条结果(该日期无车次)';
+          Logger.warn(TAG, '12306 returned 0 results for %{public}s→%{public}s', fromCode, toCode);
+        }
 
         return this.parse12306Result(resultArr, fromCode, toCode);
       } catch (e) {
         lastErr = JSON.stringify(e);
-        Logger.warn(TAG, '12306 queryG attempt %{public}d/3 failed %{public}s→%{public}s: %{public}s',
+        // 补充原生错误信息（e.code / e.message 可能不在 stringify 里）
+        try {
+          const code: string = String((e as Record<string, number>)['code'] ?? '');
+          const msg: string = String((e as Record<string, string>)['message'] ?? '');
+          if (code && code !== 'undefined') lastErr += ' code=' + code;
+          if (msg && msg !== 'undefined') lastErr += ' msg=' + msg;
+        } catch (_ign) { /* ignore */ }
+        if (lastErr.includes('REJECTED_HTML_NOT_JSON')) {
+          this.lastDiag = '[queryG] ' + fromCode + '→' + toCode + ' 被反爬拦截(返回HTML非JSON)';
+        } else if (lastErr === '{}' || lastErr === '0' || lastErr.includes('"responseCode":-1')) {
+          this.lastDiag = '[queryG] ' + fromCode + '→' + toCode + ' 连接失败(网络不可达/TLS拒绝)';
+        } else if (lastErr.includes('INIT_HTTP_')) {
+          const m: RegExpMatchArray | null = lastErr.match(/INIT_HTTP_(\d+)/);
+          this.lastDiag = '[init] ' + fromCode + '→' + toCode + ' HTTP' + (m ? m[1] : '?');
+        } else if (lastErr.includes('HTTP_-1') || lastErr.includes('timeout') || lastErr.includes('TIMEOUT')) {
+          this.lastDiag = '[queryG] ' + fromCode + '→' + toCode + ' HTTP连接失败/超时';
+        } else if (lastErr.includes('REJECTED_httpstatus=')) {
+          this.lastDiag = '[queryG] ' + fromCode + '→' + toCode + ' 12306拒绝(httpstatus≠200)';
+        } else if (lastErr.includes('Unexpected Text') || lastErr.includes('Invalid Token') || lastErr.includes('SyntaxError')) {
+          this.lastDiag = '[queryG] ' + fromCode + '→' + toCode + ' 响应非JSON(可能被反爬)';
+        } else if (lastErr.includes('HTTP_400')) {
+          this.lastDiag = '[queryG] ' + fromCode + '→' + toCode + ' 请求被拒(HTTP400，缺Cookie或参数错误)';
+        } else if (lastErr.includes('HTTP_')) {
+          const httpCode: string = lastErr.match(/HTTP_(\d+)/)?.[1] ?? '?';
+          this.lastDiag = '[queryG] ' + fromCode + '→' + toCode + ' HTTP' + httpCode;
+        } else {
+          this.lastDiag = '[queryG] ' + fromCode + '→' + toCode + ' 异常: ' + lastErr.substring(0, 60);
+        }
+        Logger.warn(TAG, '12306 queryG attempt %{public}d/4 failed %{public}s→%{public}s: %{public}s',
           retry + 1, fromCode, toCode, lastErr);
       } finally {
         req.destroy();
       }
-      if (retry < 1) await new Promise<void>((r) => setTimeout(r, 800));
+      // 反爬拦截 → 等更久；连接失败 → 短等
+      const isAntiBot: boolean = lastErr.includes('REJECTED_HTML') || lastErr.includes('被反爬');
+      const delay: number = isAntiBot ? 2000 + retry * 1000 : 800 + retry * 400;
+      if (retry < 3) await new Promise<void>((r) => setTimeout(r, delay));
     }
-    Logger.error(TAG, '12306 queryG all attempts failed %{public}s→%{public}s', fromCode, toCode);
+    Logger.error(TAG, '12306 queryG all %{public}d attempts failed %{public}s→%{public}s', 4, fromCode, toCode);
     return [];
   }
 
@@ -201,12 +253,6 @@ export class TransportSearchService {
     for (let retry: number = 0; retry < 2; retry++) {
       const req: http.HttpRequest = http.createHttp();
       try {
-        await req.request('https://kyfw.12306.cn/otn/leftTicket/init', {
-          method: http.RequestMethod.GET,
-          header: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept-Language': 'zh-CN,zh;q=0.9' },
-          connectTimeout: 15000, readTimeout: 20000,
-        } as http.HttpRequestOptions);
-
         const url: string = 'https://kyfw.12306.cn/otn/leftTicketPrice/queryAllPublicPrice' +
           `?leftTicketDTO.train_date=${encodeURIComponent(date)}` +
           `&leftTicketDTO.from_station=${encodeURIComponent(fromCode)}` +
@@ -214,8 +260,17 @@ export class TransportSearchService {
 
         const resp: http.HttpResponse = await req.request(url, {
           method: http.RequestMethod.GET,
-          header: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': 'application/json', 'Referer': 'https://kyfw.12306.cn/otn/leftTicket/init', 'Accept-Language': 'zh-CN,zh;q=0.9' },
-          connectTimeout: 15000, readTimeout: 20000,
+          header: {
+            'Host': 'kyfw.12306.cn',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Referer': 'https://www.12306.cn/',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Connection': 'keep-alive',
+            'Cache-Control': 'no-cache',
+          },
+          connectTimeout: 30000, readTimeout: 20000,
         } as http.HttpRequestOptions);
 
         if (resp.responseCode !== 200 || !resp.result) throw new Error(`HTTP ${resp.responseCode}`);
@@ -369,6 +424,7 @@ export class TransportSearchService {
       for (const t of trains) results.push(t);
       Logger.info(TAG, '12306: %{public}d results for %{public}s→%{public}s', trains.length, from, to);
     } catch (e) {
+      if (!this.lastDiag) this.lastDiag = '[searchAll] 异常: ' + JSON.stringify(e).substring(0, 80);
       Logger.warn(TAG, '12306 search failed for %{public}s→%{public}s: %{public}s', from, to, JSON.stringify(e));
     }
     // 飞机：WebXml 免费接口

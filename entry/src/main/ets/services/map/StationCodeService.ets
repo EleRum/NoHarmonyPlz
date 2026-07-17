@@ -253,6 +253,158 @@ const BUILTIN_STATIONS: Record<string, string[]> = {
   '伊宁': ['YNR', 'YNI'],
 };
 
+/** 电报码→完整站名 精确映射（12306返回的站码直接查找） */
+const CODE_TO_STATION: Record<string, string> = {
+  // 北京
+  'BJP': '北京', 'VAP': '北京北', 'BOP': '北京东', 'IWP': '北京西',
+  'JFP': '北京南', 'JCP': '北京朝阳', 'VNP': '北京丰台',
+  // 天津
+  'TJP': '天津', 'TBP': '天津西', 'TIP': '天津南', 'CFP': '天津北',
+  // 上海
+  'SHH': '上海', 'AOH': '上海虹桥', 'SNH': '上海南', 'SXH': '上海西',
+  // 重庆
+  'CQW': '重庆', 'CXW': '重庆北', 'CRW': '重庆西', 'CMW': '重庆南',
+  // 广州
+  'GZQ': '广州', 'GGQ': '广州南', 'GNQ': '广州东', 'GBQ': '广州北', 'GXQ': '广州西',
+  // 深圳
+  'SZQ': '深圳', 'NGQ': '深圳北', 'FJQ': '深圳东', 'OSQ': '深圳西',
+  'IFQ': '深圳坪山', 'FAQ': '深圳机场北',
+  // 成都
+  'CDW': '成都', 'ICW': '成都东', 'CMW': '成都南', 'CNW': '成都西',
+  // 杭州
+  'HZH': '杭州', 'XHH': '杭州东', 'HGH': '杭州南', 'HEH': '杭州西',
+  // 南京
+  'NJH': '南京', 'NKH': '南京南',
+  // 武汉
+  'WHN': '武汉', 'WCN': '武昌', 'HKN': '汉口', 'WRN': '武汉东',
+  // 西安
+  'XAY': '西安', 'XAW': '西安北', 'XOY': '西安南',
+  // 郑州
+  'ZZF': '郑州', 'ZAF': '郑州东', 'ZDF': '郑州西', 'ZNF': '郑州南',
+  // 济南
+  'JNK': '济南', 'JXK': '济南西', 'MDK': '济南东', 'JGK': '济南',
+  // 长沙
+  'CSQ': '长沙', 'CWQ': '长沙南', 'CEM': '长沙西',
+  // 合肥
+  'HFH': '合肥', 'HOH': '合肥南', 'HAH': '合肥北城',
+  // 南昌
+  'NCG': '南昌', 'NXG': '南昌西',
+  // 福州
+  'FZS': '福州', 'FYS': '福州南',
+  // 石家庄
+  'SJP': '石家庄', 'SXP': '石家庄北', 'VVP': '石家庄东',
+  // 太原
+  'TYV': '太原', 'TNV': '太原南',
+  // 沈阳
+  'SYT': '沈阳', 'SOT': '沈阳北', 'SDT': '沈阳南', 'SET': '沈阳东',
+  // 长春
+  'CCT': '长春', 'CRT': '长春西',
+  // 哈尔滨
+  'HBB': '哈尔滨', 'HKB': '哈尔滨西', 'HJB': '哈尔滨北', 'HEB': '哈尔滨东',
+  // 昆明
+  'KMM': '昆明', 'KOM': '昆明南',
+  // 贵阳
+  'GIW': '贵阳', 'KYW': '贵阳北', 'KEW': '贵阳东',
+  // 南宁
+  'NNZ': '南宁', 'NRZ': '南宁东',
+  // 呼和浩特
+  'HHC': '呼和浩特', 'NDC': '呼和浩特东',
+  // 兰州
+  'LZJ': '兰州', 'LAJ': '兰州西', 'LEJ': '兰州东',
+  // 西宁
+  'XNO': '西宁',
+  // 银川
+  'YCJ': '银川',
+  // 乌鲁木齐
+  'WMR': '乌鲁木齐', 'WAR': '乌鲁木齐南',
+  // 拉萨
+  'LSO': '拉萨',
+  // 海口
+  'VUQ': '海口', 'HMQ': '海口东',
+  // 三亚
+  'SEQ': '三亚', 'SYQ': '三亚',
+  // 苏州
+  'SZH': '苏州', 'OHH': '苏州北', 'SXH': '苏州园区', 'SQH': '苏州新区',
+  // 无锡
+  'WXH': '无锡', 'WGH': '无锡东', 'WEH': '无锡新区',
+  // 常州
+  'CZH': '常州', 'CBH': '常州北',
+  // 徐州
+  'XCH': '徐州', 'XEH': '徐州东',
+  // 宁波
+  'NGH': '宁波', 'NVH': '宁波东',
+  // 温州
+  'WZH': '温州', 'WRH': '温州南',
+  // 厦门
+  'XKS': '厦门', 'XMS': '厦门北',
+  // 青岛
+  'QDK': '青岛', 'QXK': '青岛北', 'QDK': '青岛西',
+  // 大连
+  'DLT': '大连', 'DFT': '大连北',
+  // 桂林
+  'GLZ': '桂林', 'GIZ': '桂林北', 'GEZ': '桂林西',
+  // 黄山
+  'HSH': '黄山', 'GXH': '黄山北',
+  // 张家界
+  'ZJJ': '张家界', 'JXQ': '张家界西',
+  // 洛阳
+  'LYF': '洛阳', 'LDL': '洛阳龙门',
+  // 宜昌
+  'YCN': '宜昌', 'HAN': '宜昌东',
+  // 襄阳
+  'XFN': '襄阳', 'XWN': '襄阳东',
+  // 株洲
+  'ZZQ': '株洲', 'ZVQ': '株洲西',
+  // 衡阳
+  'HYQ': '衡阳', 'HEQ': '衡阳东',
+  // 岳阳
+  'YYQ': '岳阳', 'YIQ': '岳阳东',
+  // 珠海
+  'ZHQ': '珠海', 'ZIQ': '珠海北',
+  // 佛山
+  'FSQ': '佛山', 'FOQ': '佛山西',
+  // 东莞
+  'DRQ': '东莞', 'DAQ': '东莞东', 'RRQ': '东莞南',
+  // 惠州
+  'HCQ': '惠州', 'HUQ': '惠州南',
+  // 汕头
+  'OTQ': '汕头', 'SWQ': '汕尾',
+  // 湛江
+  'ZWQ': '湛江', 'ZJZ': '湛江西',
+  // 柳州
+  'LZZ': '柳州', 'UMZ': '柳州南',
+  // 北海
+  'BHZ': '北海', 'BBZ': '北海',
+  // 大理
+  'DLM': '大理', 'DKM': '大理',
+  // 丽江
+  'LJM': '丽江', 'LBM': '丽江',
+  // 遵义
+  'ZIW': '遵义', 'ZYW': '遵义南',
+  // 绵阳
+  'MYW': '绵阳', 'MZW': '绵阳',
+  // 乐山
+  'UTW': '乐山', 'IGW': '乐山北',
+  // 唐山
+  'TSP': '唐山', 'TAP': '唐山西',
+  // 保定
+  'BDP': '保定', 'BPP': '保定东',
+  // 秦皇岛
+  'QTP': '秦皇岛', 'BOP': '北戴河',
+  // 烟台
+  'YAK': '烟台', 'YGK': '烟台南',
+  // 威海
+  'WKK': '威海', 'WEK': '威海北',
+  // 延吉
+  'YJL': '延吉', 'YJX': '延吉西',
+  // 齐齐哈尔
+  'QHX': '齐齐哈尔', 'QEX': '齐齐哈尔南',
+  // 牡丹江
+  'MDB': '牡丹江', 'MDJ': '牡丹江',
+  // 襄阳
+  'XFN': '襄阳', 'XWN': '襄阳东',
+};
+
 export class StationCodeService {
   private static instance: StationCodeService | null = null;
   private cityIndex: Map<string, string[]> = new Map();
@@ -343,8 +495,21 @@ export class StationCodeService {
     return this.codeToNameMap.get(code) || code;
   }
 
-  /** 根据电报码反查站名（兼容旧接口，返回城市名） */
+  /** 根据电报码反查站名：精确站名 > 城市名 > 城市+站 > 原码 */
   getStationName(code: string): string {
-    return this.getCityName(code);
+    if (!code || code.length === 0) return '';
+    // 1. 查精确站名表
+    const exact: string | undefined = CODE_TO_STATION[code];
+    if (exact) return exact;
+    // 2. 查城市名
+    const city: string | undefined = this.codeToNameMap.get(code);
+    if (city) return city;
+    // 3. 遍历查找：此code属于哪个城市 → 城市+站
+    for (const c of this.cityIndex.keys()) {
+      const codes: string[] | undefined = this.cityIndex.get(c);
+      if (codes && codes.includes(code)) return c + '站';
+    }
+    // 4. 最终兜底
+    return code;
   }
 }
