@@ -764,6 +764,7 @@ export struct TourGuideContent {
           }
         })
 
+
         if (!this.isMapReady) {
           Column() {
             LoadingProgress().width(32).height(32).color('#8B5CF6')

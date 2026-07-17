@@ -71,7 +71,7 @@ const BUILTIN_STATIONS: Record<string, string[]> = {
   '厦门': ['XKS', 'XMS'],
   '南昌': ['NCG', 'NXG'],
   '济南': ['JNK', 'JXK', 'MDK'],
-  '青岛': ['QDK', 'QXK', 'QDK'],
+  '青岛': ['QDK', 'QXK'],
   '苏州': ['SZH', 'OHH'],
   '无锡': ['WXH', 'WGH'],
   '常州': ['CZH', 'CBH'],
@@ -270,7 +270,7 @@ const CODE_TO_STATION: Record<string, string> = {
   'SZQ': '深圳', 'NGQ': '深圳北', 'FJQ': '深圳东', 'OSQ': '深圳西',
   'IFQ': '深圳坪山', 'FAQ': '深圳机场北',
   // 成都
-  'CDW': '成都', 'ICW': '成都东', 'CMW': '成都南', 'CNW': '成都西',
+  'CDW': '成都', 'ICW': '成都东', 'CNW': '成都西',
   // 杭州
   'HZH': '杭州', 'XHH': '杭州东', 'HGH': '杭州南', 'HEH': '杭州西',
   // 南京
@@ -324,7 +324,7 @@ const CODE_TO_STATION: Record<string, string> = {
   // 三亚
   'SEQ': '三亚', 'SYQ': '三亚',
   // 苏州
-  'SZH': '苏州', 'OHH': '苏州北', 'SXH': '苏州园区', 'SQH': '苏州新区',
+  'SZH': '苏州', 'OHH': '苏州北', 'SQH': '苏州新区',
   // 无锡
   'WXH': '无锡', 'WGH': '无锡东', 'WEH': '无锡新区',
   // 常州
@@ -338,7 +338,6 @@ const CODE_TO_STATION: Record<string, string> = {
   // 厦门
   'XKS': '厦门', 'XMS': '厦门北',
   // 青岛
-  'QDK': '青岛', 'QXK': '青岛北', 'QDK': '青岛西',
   // 大连
   'DLT': '大连', 'DFT': '大连北',
   // 桂林
@@ -352,7 +351,6 @@ const CODE_TO_STATION: Record<string, string> = {
   // 宜昌
   'YCN': '宜昌', 'HAN': '宜昌东',
   // 襄阳
-  'XFN': '襄阳', 'XWN': '襄阳东',
   // 株洲
   'ZZQ': '株洲', 'ZVQ': '株洲西',
   // 衡阳
@@ -390,7 +388,7 @@ const CODE_TO_STATION: Record<string, string> = {
   // 保定
   'BDP': '保定', 'BPP': '保定东',
   // 秦皇岛
-  'QTP': '秦皇岛', 'BOP': '北戴河',
+  'QTP': '秦皇岛',
   // 烟台
   'YAK': '烟台', 'YGK': '烟台南',
   // 威海
@@ -402,7 +400,6 @@ const CODE_TO_STATION: Record<string, string> = {
   // 牡丹江
   'MDB': '牡丹江', 'MDJ': '牡丹江',
   // 襄阳
-  'XFN': '襄阳', 'XWN': '襄阳东',
 };
 
 export class StationCodeService {
