@@ -64,7 +64,7 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
   * set_budget 只能由用户说出金额后调用，禁止自己编预算！
   * search_hotels 只能由用户说"帮我找酒店"后调用，禁止主动搜！
   * make_plan 只能在 5 项信息全齐 + 用户同意后调用！
-  * 用户没提酒店 → 不问不搜
+  * 用户没提酒店 → 交通确认后主动问是否需要找酒店
 - **用户明确要求的才执行**
   * 用户说"第X天去A、B、C" → 一条 search_and_add，keywords="A,B,C"（逗号分隔，顺序=用户说的顺序，禁止拆成多条！）
   * 用户说"推荐几个景点" → 文字列出，不自动加
@@ -92,8 +92,10 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
 - 用户没说预算 → 就当没预算，不要猜！
 
 ## 酒店
-- 用户说"帮我找酒店" → 问区域偏好 → search_hotels
-- 用户没提 → 不问不搜
+- 交通确认后 → 主动问用户"需要帮你找酒店吗？偏好哪个区域？"
+- 用户说需要 → 问区域偏好 → search_hotels → 等用户选定 → 通过 search_and_add 添加
+- 用户说不需要/本地有住处 → 跳过酒店，不追问
+- 目的地=用户常住城市（本地人模式）→ 不问酒店
 - 选定后全程住同一家
 
 ## 跨城交通（严格分两步！禁止同时搜去程和返程！）
@@ -113,7 +115,13 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
 
 ## 本地人模式
 - 目的地 = 用户常住城市 → 无跨城交通、无酒店
-- 专注推荐景点美食`;
+- 专注推荐景点美食
+
+## 上下文备忘录（每次对话自动附带，不要忽略！）
+- system prompt 末尾会自动附带"当前行程状态"备忘录
+- 备忘录里的信息都是已确认的，以此为唯一依据，不要凭记忆猜测
+- 酒店名、车次号、时间、预算等以备忘录为准
+- 未确认的会标"未确认"，需要时主动询问用户`;
 
 export interface ToolCall {
   action: string;
@@ -310,9 +318,82 @@ export class TourGuideAgent {
     return this.plan.city.includes(this.userCity) || this.userCity.includes(this.plan.city);
   }
 
-  /** 获取完整的系统提示（含用户偏好） */
+  /** 从 TourPlan 生成结构化状态摘要，注入每次 AI 调用的 system prompt。
+   *  对话长了也不丢失已确认信息（酒店/交通/预算/日程）。 */
+  private buildContextMemo(): string {
+    const p: TourPlan = this.plan;
+    if (!p.city || p.cityLat === 0) return ''; // 还没开始规划
+
+    const lines: string[] = [];
+    lines.push('\n## 当前行程状态（已确认，每次对话都带）');
+
+    // 基础信息
+    const basics: string[] = [];
+    basics.push('目的地: ' + p.city);
+    if (this.userCity) basics.push('出发: ' + this.userCity);
+    if (p.days > 0) basics.push('天数: ' + p.days + '天');
+    if (p.totalBudget) basics.push('预算: ' + p.totalBudget + '元');
+    lines.push(basics.join(' | '));
+
+    // 酒店
+    if (p.hotel) {
+      lines.push('酒店: ' + p.hotel.name + (p.hotel.note ? '(' + p.hotel.note + ')' : '') + ' [已确认]');
+    } else {
+      lines.push('酒店: 未确认');
+    }
+
+    // 去程交通
+    const t1: InterCityTransport | undefined = p.transportToCity;
+    if (t1 && t1.from) {
+      const t1Label: string = getTransportLabel(t1.type);
+      lines.push('去程: ' + t1Label + (t1.number || '') + ' ' + t1.from + '→' + t1.to +
+        (t1.departureTime ? ' ' + t1.departureTime : '') +
+        (t1.cost ? ' ¥' + t1.cost : '') + ' [已确认]');
+    } else {
+      lines.push('去程: 未确认');
+    }
+
+    // 返程交通
+    const t2: InterCityTransport | undefined = p.transportBack;
+    if (t2 && t2.from) {
+      const t2Label: string = getTransportLabel(t2.type);
+      lines.push('返程: ' + t2Label + (t2.number || '') + ' ' + t2.from + '→' + t2.to +
+        (t2.departureTime ? ' ' + t2.departureTime : '') +
+        (t2.cost ? ' ¥' + t2.cost : '') + ' [已确认]');
+    } else {
+      lines.push('返程: 未确认');
+    }
+
+    // 每天行程摘要
+    const dayCount: number = Math.max(p.days, p.dailyPlans.length);
+    for (let d: number = 0; d < dayCount; d++) {
+      const day: TourDay | undefined = d < p.dailyPlans.length ? p.dailyPlans[d] : undefined;
+      if (!day) {
+        lines.push('第' + (d + 1) + '天: 未安排');
+        continue;
+      }
+      const names: string[] = [];
+      for (let i: number = 0; i < day.pois.length; i++) {
+        const poi: TourPoiItem = day.pois[i];
+        if (isMarkerPoi(poi)) continue;
+        // 截断长名称
+        const shortName: string = poi.name.length > 8 ? poi.name.substring(0, 8) + '..' : poi.name;
+        names.push(shortName);
+      }
+      if (names.length === 0) {
+        lines.push('第' + (d + 1) + '天: 未安排');
+      } else {
+        lines.push('第' + (d + 1) + '天(' + names.length + '个): ' + names.join(' → '));
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  /** 获取完整的系统提示（含用户偏好 + 行程上下文备忘录） */
   private getSystemPrompt(): string {
-    return SYSTEM_PROMPT + this.userPrefContext;
+    const memo: string = this.buildContextMemo();
+    return SYSTEM_PROMPT + this.userPrefContext + memo;
   }
 
   /** 检测是否为新规划请求（更换城市/重新规划）
@@ -930,7 +1011,9 @@ export class TourGuideAgent {
             });
           }
           this.plan.dailyPlans.push({
-            dayIndex: nd, label: `第${nd + 1}天`, pois: basePois, route: null
+            dayIndex: nd, label: `第${nd + 1}天`, pois: basePois, route: null,
+            // 第一天有到达交通时，自动用到达时间作为起始时间（不浪费上午）
+            dayStartMin: nd === 0 ? this.parseArrivalStartMin() : undefined
           });
         }
         // 减少天数则截断，保留前 N 天
@@ -1233,6 +1316,15 @@ export class TourGuideAgent {
         if (!this.plan.transportToCity) {
           this.plan.transportToCity = transport;
           resultText = `已记录从${tFrom}到${tTo}的${getTransportLabel(tType)}${tNum ? ' ' + tNum : ''}${tDep ? ' ' + tDep : ''}。`;
+          // 下午到达 → 更新第一天的 dayStartMin，避免从 8:00 开始空等
+          if (this.plan.dailyPlans.length > 0) {
+            const arrivalMin: number | undefined = this.parseArrivalStartMin();
+            if (arrivalMin !== undefined) {
+              this.plan.dailyPlans[0].dayStartMin = arrivalMin;
+              this.calculateTimeline(this.plan.dailyPlans[0]);
+              Logger.info(TAG, 'Day 0 start updated to arrival time: ' + formatClockTime(arrivalMin));
+            }
+          }
           // 如果目的城市与当前计划城市不同，更新城市
           if (tTo !== this.plan.city && this.plan.city.length === 0) {
             const loc: LatLng | null = await AmapSearchService.getInstance().geocodeCity(tTo);
@@ -1759,6 +1851,22 @@ export class TourGuideAgent {
     }
 
     return insertIdx;
+  }
+
+  /** 从到达交通的 arrivalTime 解析起始分钟数（如 "7月20日 14:30" → 870）。
+   *  提前到达则保留缓冲（如 13:00 到 → 13:30 开始），上午到达用默认 8:00。 */
+  private parseArrivalStartMin(): number | undefined {
+    const t: InterCityTransport | undefined = this.plan.transportToCity;
+    if (!t || !t.arrivalTime) return undefined;
+    const m: RegExpMatchArray | null = t.arrivalTime.match(/(\d{1,2}):(\d{2})/);
+    if (!m) return undefined;
+    const hour: number = parseInt(m[1]);
+    const min: number = parseInt(m[2]);
+    const arrMin: number = hour * 60 + min;
+    // 上午/中午到达 → 默认 8:00 开始，时间充裕
+    if (arrMin < 780) return undefined; // 13:00 前到达，保持默认
+    // 下午到达 → 到达时间 + 30分钟缓冲（出站/放行李）
+    return arrMin + 30;
   }
 
   /** timeSlot 字符串 → 估算分钟数，如 "9:00-10:30" → 540 */
