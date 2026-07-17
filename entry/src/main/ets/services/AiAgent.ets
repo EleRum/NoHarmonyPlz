@@ -699,11 +699,11 @@ export class AiAgent {
       const searchService: AmapSearchService = AmapSearchService.getInstance();
       const pois = await searchService.nearbySearch(keywordsStr, lat, lng, 3000);
       if (pois.length > 0) {
-        return `"${keywordsStr}"周边结果:\n${pois.slice(0, 5).map((p, i) =>
+        return `📍 在你常活动区域搜"${keywordsStr}"：\n${pois.slice(0, 5).map((p, i) =>
           `${i + 1}. ${p.name} (${p.type || ''}) — ${p.address || ''}`
         ).join('\n')}`;
       }
-      return `未找到"${keywordsStr}"的周边结果。`;
+      return `📍 在你常活动区域未找到"${keywordsStr}"。`;
     } catch (e) {
       return `周边搜索暂时不可用。`;
     }

@@ -5,8 +5,9 @@
 import { ClaudeService, ClaudeReply } from './ClaudeService';
 import { AmapSearchService } from './map/AmapSearchService';
 import { TransportSearchService, TicketOption as TransportTicketOption } from './map/TransportSearchService';
+import { StationCodeService } from './map/StationCodeService';
 import { PoiResult, LatLng, NavRoute, DirectionMode } from './map/MapTypes';
-import { TourPlan, TourDay, TourPoiItem, InterCityTransport, createEmptyPlan, getBudgetBreakdown, getTransportEmoji, getTransportLabel } from '../model/TourPlan';
+import { TourPlan, TourDay, TourPoiItem, InterCityTransport, createEmptyPlan, getBudgetBreakdown, getTransportEmoji, getTransportLabel, isMarkerPoi, formatClockTime, DEFAULT_DAY_START_MIN, DEFAULT_DAY_END_MIN, MEAL_WINDOWS, MealWindow } from '../model/TourPlan';
 import { Logger } from '../common/Logger';
 import { haversineDistance } from '../common/LocationUtils';
 
@@ -17,102 +18,67 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
 ## 风格
 口语化，像朋友聊天。一次只问1个问题。给出具体建议。
 
+## 关键信息清单 — 缺一不可！
+这些信息**只能由用户给出，禁止你替用户决定**。用户说了就记住，不要重复问。
+1. 目的地 — 用户想去哪个城市
+2. 出发地 — 用户从哪个城市出发
+3. 出发时间 — 哪天出发
+4. 游玩天数 — 玩几天
+5. 经费预算 — 预算多少
+
+**任何一个缺失 → 先问用户！补齐之前禁止跳到下一步！**
+
 ## 工作流程
 **每步都要等用户回应，不要连续跳步！**
-1. 用户说想去某城市玩 → geocode_city 定位
-2. 定位后 → **先问**"哪天出发？""从哪个城市出发？"→ 等用户回答 → search_transport
-3. 交通搞定后 → **问**"预算大概多少？"→ 等用户回答 → set_budget
-4. 以上都有了 → **问**"需要帮你找酒店吗？想住哪个区域？"→ 用户说要 → search_hotels
-5. 天数+交通+预算全齐 → **问**"帮你创建X天行程？"→ 用户同意 → make_plan
-6. 用户说"第X天去/吃XX" → search_and_add 一步完成
+1. 用户说想去某城市 → geocode_city 定位 → 问出发地和出发时间
+2. 出发地+日期已知 → search_transport 查交通
+3. 交通搞定 → 问经费预算（用户说出数字才 set_budget！）
+4. 天数+交通+预算齐 → 问用户是否创建行程 → 用户同意 → make_plan
+5. 计划创建后 → 等用户指定景点 → search_and_add
+6. 用户说调整起止时间 → set_day_bounds
 
 ## 工具调用格式
-回复末尾加 ---JSON---，可以一次调用多个工具（数组格式，推荐！）：
-
-单工具（兼容）：
+回复末尾加 ---JSON---，可一次调用多个工具（数组格式）：
 ---JSON---
 {"action":"geocode_city","city":"成都"}
-{"action":"search_hotels"}
-{"action":"search_hotels","keywords":"春熙路"}
+[{"action":"geocode_city","city":"成都"},{"action":"search_transport","from":"北京","to":"成都","date":"7月20日"}]
 
-多工具（数组 — 能并行的事一次性做完，减少等待！）：
----JSON---
-[{"action":"geocode_city","city":"成都"},{"action":"search_transport","from":"北京","to":"成都","date":"7月20日"},{"action":"search_hotels"}]
-
-## 并行规则
-- geocode_city 如果和搜索类工具一起调用，系统会自动先定位再搜索，放心放在同一个数组里
-- 独立搜索（搜酒店+搜交通+搜景点+多个 search_and_add）可以放心并行
-- search_and_add 多次调用可以并行（搜宽窄巷子+搜火锅 一次搞定）
-- **不要串行做能并行的事！**一次数组输出比多次往返快得多
-
-## 规则（每一条都必须遵守！）
+## 规则（必须遵守！）
 - **最重要的规则：每次回复末尾都必须带 ---JSON--- 工具调用！**
-  * 只有纯粹闲聊（打招呼、道谢）才不加。其余情况：定位→搜交通→问预算→搜酒店→生成计划→完善行程，每一步都输出工具！
-  * 宁可多调用一次，也不能闲着！
-- 酒店：默认全程住同一家，换酒店是例外
-  * 先问用户"想住在哪个区域？有什么偏好吗？" → search_hotels 搜
-  * 用户选定后 → search_and_add 加到当天，**然后依次更新其他天的出发锚点**（或者提醒用户"其他天也住这家？我帮你全部更新"）
-  * 用户说"第X天想住别的地方" → 才单独改那一天
+  * 只有纯粹闲聊（打招呼、道谢）才不加
+- **严禁擅自决定！你是建议者，用户是决策者！**
+  * set_budget 只能由用户说出金额后调用，禁止自己编预算！
+  * search_hotels 只能由用户说"帮我找酒店"后调用，禁止主动搜！
+  * make_plan 只能在 5 项信息全齐 + 用户同意后调用！
   * 用户没提酒店 → 不问不搜
-- geocode_city 只需一次。城市换了才重新geocode
-- **用户明确要求的才执行，不要替用户做决定！**
-  * 用户说"第X天去A和B" → 加 A 和 B 到 dayIndex=X-1
-  * 用户没说哪一天 → 按顺序填充：先填满当前天的时段，再开下一天
-    - Day 0 上午空 → 加 Day 0 上午 | Day 0 下午空 → Day 0 下午
-    - 当天满了 → 自动开 Day 1 | 等等
-  * 用户说"推荐几个景点" → 文字列出，不乱加，等用户选
-  * search_poi 只搜给用户看，不要全加进去
-- **make_plan 不要抢着调用！必须等以下条件全部满足后再问用户确认：**
-  ① 用户已经说了玩几天（没说的话先问"打算玩几天？"）
-  ② 交通已定（出发城市+日期已有搜索结果 或 本地游）
-  ③ 预算已设
-  满足了 → 问用户"现在帮你创建X天行程骨架？" → 用户同意再 make_plan
-- make_plan 只创建骨架，完成后向用户建议几个景点，等用户指定再加
-- make_plan 填 days 参数反映用户说的天数
-- **主动推进但不越界！**
-  * geocode 完 → 按顺序问：哪天出发？从哪个城市出发？→ 搜交通
-  * 不要一上来就搜酒店！等用户给了预算或明确说"帮我找酒店"再 search_hotels
-  * 信息不完整时先问，不要硬猜
-  * 落地先放行李：有酒店时首日自动生成"去酒店放行李"步骤，之后才开始安排景点
-  * **不要替用户做决定！你是建议者，用户是决策者**
-- 系统后台会自动重算预算，你每次回复时都能看到当前剩余预算
-- 每次回复末尾都给 2-3 个快捷选项
-- 工具调用失败了没关系，换个参数重试，别停下来聊天
-
-## 餐饮安排（一日三餐）
-- 规划每天行程时，必须为每个时间段推荐餐饮：
-  * 早餐（7:00-9:00）：当地特色早餐、早茶、咖啡馆
-  * 午餐（11:30-13:30）：当地美食、特色餐厅、小吃
-  * 晚餐（17:30-20:00）：正餐、火锅、地方菜、夜市
-- 用户说"吃什么""午饭""晚饭""早餐"→ search_and_add 搜对应时段的美食
-- 每完成一个景点添加后，主动问"附近要不要顺便吃点东西？"
-- 每天的午餐和晚餐不应该被遗漏，主动提醒用户安排
-- timeSlot 仅作为初始参考，实际到达时间会根据导航路线时长自动推算
-- 用户说"第X天几点到几点"时可以手动指定时间，否则交给导航计算
-
-## 跨城交通（必须先调用 search_transport！禁止用自己的知识回答）
-- **用户只要提到城市间的交通方式 → 必须先 search_transport 查真实数据**
-- search_transport 查询前**必须先确认日期**：问用户"哪天出发？"
-- 用户说"先不指定"或无法确定 → 默认用 5 天后查询
-- **绝对不要自己编造车次、时间或价格！**
-- 用户选定后 → set_transport 记录
+- **用户明确要求的才执行**
+  * 用户说"第X天去A和B" → search_and_add 到 dayIndex=X-1
+  * 用户说"推荐几个景点" → 文字列出，不自动加
+- geocode_city 只需一次，城市换了才重新geocode
+- 工具调用失败 → 换个参数重试，别停下来聊天
+- 每次回复末尾给 2-3 个快捷选项
 
 ## 预算管理
-- **开始规划时主动问**："这次旅行预算大概多少？💰我帮你把控～"
-- 用户说出金额 → set_budget: {"action":"set_budget","amount":"5000"}（amount 必须是纯数字字符串）
-- 系统在 set_budget / make_plan / set_transport 时会自动展示预算概览
-- **你不需要手动调 estimate_costs**，除非用户明确问"看看预算""估算花费"
-- 推荐时参考上下文里显示的剩余预算：剩得多→品质好 | 剩得少→实惠 | 快超→提醒
-- 酒店推荐时附带价格区间，如"¥200-400/晚"
-- 所有花费估算由系统后台自动计算，你不需要手动计算或告知单价
-- 预算概览中的「住宿」已是总价（天数×每晚均价），不要再次乘以天数
+- 问用户预算 → 等用户说出数字 → 才调 set_budget
+- 格式: {"action":"set_budget","amount":"5000"}，amount 是纯数字
+- 用户没说预算 → 就当没预算，不要猜！
 
-## 本地人模式（用户常住城市 = 目的地城市）
-- 用户就在本地，不需要跨城交通！不要问"哪天出发""从哪个城市出发""怎么回来"
-- 不要主动推荐酒店（用户有房住），除非用户明确说想住酒店
-- 专注于推荐景点、美食、购物、本地体验
-- 预算不含酒店和跨城交通：estimate_costs 时跳过这两项
-- 不要说"返程""回去"之类的话，用户就在本地`;
+## 酒店
+- 用户说"帮我找酒店" → 问区域偏好 → search_hotels
+- 用户没提 → 不问不搜
+- 选定后全程住同一家
+
+## 跨城交通
+- 出发地+目的地已知 → **去程和返程一起查！**两个方向并行调用 search_transport
+  * 去程: {"action":"search_transport","from":"北京","to":"成都"}
+  * 返程: {"action":"search_transport","from":"成都","to":"北京"}
+- 没日期 → 系统默认5天后（返程日期 = 去程日期 + 游玩天数），不用问
+- 用户选定方案 → set_transport 分别记录去程和返程
+- 禁止编造车次/时间/价格！
+
+## 本地人模式
+- 目的地 = 用户常住城市 → 无跨城交通、无酒店
+- 专注推荐景点美食`;
 
 export interface ToolCall {
   action: string;
@@ -145,6 +111,9 @@ export interface ToolCall {
   budget?: string;  // 兼容: AI 有时用 budget 代替 amount
   cost?: string;
   date?: string;
+  // 日边界
+  dayStartHour?: string;
+  dayEndHour?: string;
 }
 
 /** 地图标记数据 */
@@ -514,12 +483,16 @@ export class TourGuideAgent {
       collected.push(geocodeIntent);
     }
 
-    // ── 2. 收集跨城交通意图（显式关键词） ──
+    // ── 2. 收集跨城交通意图（去程+返程一起查） ──
     const transportIntent: ToolCall | undefined = this.detectTransportIntent(input);
     if (transportIntent) {
       Logger.info(TAG, 'Transport intent detected: %{public}s→%{public}s',
         transportIntent.from ?? '', transportIntent.to ?? '');
       collected.push(transportIntent);
+      // 自动补返程：交换 from/to
+      const backIntent: ToolCall = { action: 'search_transport', from: transportIntent.to, to: transportIntent.from };
+      if (transportIntent.date) backIntent.date = transportIntent.date;
+      collected.push(backIntent);
     }
 
     // ── 3. 隐式交通：有目的地 + "从X出发/来/走" → 自动补交通搜索 ──
@@ -705,7 +678,7 @@ export class TourGuideAgent {
         }
         const saKw: string = params['keywords'] ?? '';
         const saDayIdx: number = parseInt(params['dayIndex'] ?? '0');
-        const saTimeSlot: string = params['timeSlot'] ?? '';
+        const saTimeSlotHint: string = params['timeSlot'] ?? '';
 
         if (saDayIdx < 0 || saDayIdx >= this.plan.dailyPlans.length) {
           // 自动扩容到所需天数
@@ -725,12 +698,18 @@ export class TourGuideAgent {
           this.plan.days = this.plan.dailyPlans.length;
         }
 
-        // 全城文字搜索。失败自动用更宽泛的关键词重试
+        // 全城文字搜索 — 搜不到则逐级精简关键词重试
         let saPois: PoiResult[] = await AmapSearchService.getInstance().searchPoiByText(saKw, this.plan.city);
         if (saPois.length === 0 && saKw.length > 2) {
-          // 取前2个字再试一次
-          const shortKw: string = saKw.substring(0, 2);
-          saPois = await AmapSearchService.getInstance().searchPoiByText(shortKw, this.plan.city);
+          const simplified: string[] = this.simplifyKeywords(saKw);
+          for (const kw of simplified) {
+            if (kw === saKw) continue;
+            saPois = await AmapSearchService.getInstance().searchPoiByText(kw, this.plan.city);
+            if (saPois.length > 0) {
+              Logger.info(TAG, '关键词"' + saKw + '"→"' + kw + '" 找到' + saPois.length + '个结果');
+              break;
+            }
+          }
         }
         if (saPois.length === 0) {
           resultText = `在${this.plan.city}未找到"${saKw}"，试试换个说法？`;
@@ -745,73 +724,43 @@ export class TourGuideAgent {
           poiId: p.id, address: p.address
         }));
 
-        // 自动添加到计划
-        const saDay: TourDay = this.plan.dailyPlans[saDayIdx];
-        const autoTimeSlot: string = saTimeSlot || this.nextTimeSlot(saDay);
-        // 自动估算花费：优先用高德返回的人均消费
+        // 自动估算花费：优先高德人均消费，否则用统一公式
         let autoCost: number | undefined = undefined;
         const poiType: string = first.type || '';
-        // 高德 biz_ext.cost 是人均消费字符串
         if (first.cost && first.cost.length > 0) {
           autoCost = parseInt(first.cost) || undefined;
         }
         if (!autoCost) {
           const cm: number = TourGuideAgent.getCityCostMultiplier(this.plan.city);
-          if (poiType.includes('酒店') || poiType.includes('宾馆') || poiType.includes('民宿')) autoCost = Math.round(300 * cm);
-          else if (poiType.includes('餐厅') || poiType.includes('美食') || poiType.includes('小吃')) autoCost = Math.round(80 * cm);
-          else if (autoTimeSlot.includes('餐')) autoCost = Math.round(80 * cm);
-          else if (poiType.includes('购物') || poiType.includes('商场')) autoCost = Math.round(100 * cm);
-          else if (poiType.includes('景点') || poiType.includes('公园')) autoCost = Math.round(60 * cm);
-          else if (poiType.includes('咖啡') || poiType.includes('茶')) autoCost = Math.round(40 * cm);
+          autoCost = this.estimatePoiCost(poiType, cm);
+          if (autoCost === undefined && saTimeSlotHint.includes('餐')) {
+            autoCost = Math.round(80 * cm);
+          }
         }
 
         const newPoi: TourPoiItem = {
           name: first.name, lat: first.latitude, lng: first.longitude,
-          type: first.type || '景点', timeSlot: autoTimeSlot,
+          type: first.type || '景点', timeSlot: '',
           duration: '1-2h', note: first.address || '',
           mode: params['mode'] || undefined,
           estimatedCost: autoCost,
+          durationMinutes: this.parseDurationMinutes('1-2h'),
         };
 
-        // 按时间槽顺序插入
-        let saInserted: boolean = false;
-        // 酒店特殊处理：放在"出发"之后第一个位置
+        const saDay: TourDay = this.plan.dailyPlans[saDayIdx];
+
+        // === 基于时间的智能插入 ===
         const isHotel: boolean = (first.type || '').includes('酒店') || (first.type || '').includes('宾馆') || (first.type || '').includes('民宿');
+
         if (isHotel) {
           for (let i: number = 0; i < saDay.pois.length; i++) {
             if (saDay.pois[i].timeSlot === '出发') {
               saDay.pois.splice(i + 1, 0, newPoi);
-              saInserted = true;
               break;
             }
           }
-        }
-        if (!saInserted) {
-          const slotPriority: Record<string, number> = {
-            '到达': 0, '入住': 1, '出发': 2,
-            '早餐': 10, '上午': 20, '午餐': 30, '下午': 40, '晚餐': 50, '晚上': 60
-          };
-          const newPriority: number = this.getSlotPriority(autoTimeSlot, slotPriority);
-          for (let i: number = 0; i < saDay.pois.length; i++) {
-            const existSlot: string = saDay.pois[i].timeSlot;
-            if (existSlot === '到达' || existSlot === '出发' || existSlot === '入住') continue;
-            const existPriority: number = this.getSlotPriority(existSlot, slotPriority);
-            if (newPriority < existPriority) {
-              saDay.pois.splice(i, 0, newPoi);
-              saInserted = true;
-              break;
-            }
-          }
-        }
-        if (!saInserted) {
-          saDay.pois.push(newPoi);
-        }
-
-        // 酒店：默认全程住同一家，同步更新所有天的出发锚点
-        if (first.type.includes('酒店') || first.type.includes('宾馆') || first.type.includes('民宿')) {
           this.plan.hotel = { name: first.name, lat: first.latitude, lng: first.longitude,
-            type: '酒店住宿', timeSlot: '入住', duration: '全程', note: first.address || '' };
-          // 更新所有天的出发锚点
+            type: '酒店住宿', timeSlot: '入住', duration: '全程', note: first.address || '', durationMinutes: 0 };
           for (const d of this.plan.dailyPlans) {
             let found: boolean = false;
             for (let i: number = 0; i < d.pois.length; i++) {
@@ -830,14 +779,57 @@ export class TourGuideAgent {
             }
           }
           resultText = `已设全程酒店为"${first.name}"（所有天已更新）。`;
+        } else {
+          let preferredHour: number | undefined = undefined;
+          if (saTimeSlotHint) {
+            const timeMatch: RegExpMatchArray | null = saTimeSlotHint.match(/(\d{1,2}):?(\d{2})?/);
+            if (timeMatch) preferredHour = parseInt(timeMatch[1]);
+            else if (saTimeSlotHint.includes('早') || saTimeSlotHint.includes('上午')) preferredHour = 9;
+            else if (saTimeSlotHint.includes('中') || saTimeSlotHint.includes('午')) preferredHour = 12;
+            else if (saTimeSlotHint.includes('下')) preferredHour = 14;
+            else if (saTimeSlotHint.includes('晚')) preferredHour = 19;
+          }
+
+          type InsertCandidate = { pos: number; startMin: number; endMin: number; warnings: string[]; score: number };
+          const candidates: InsertCandidate[] = [];
+
+          for (let candPos: number = -1; candPos < saDay.pois.length; candPos++) {
+            const check: ReturnType<typeof this.timeFeasibilityCheck> = this.timeFeasibilityCheck(saDay, newPoi, candPos);
+            if (check.feasible) {
+              let score: number = 0;
+              if (preferredHour !== undefined) {
+                const gap: number = Math.abs(check.startMin / 60 - preferredHour);
+                score = Math.max(0, 10 - gap);
+              }
+              candidates.push({ pos: candPos + 1, startMin: check.startMin, endMin: check.endMin, warnings: check.warnings, score });
+            }
+          }
+
+          if (candidates.length > 0) {
+            candidates.sort((a, b) => b.score - a.score);
+            const best: InsertCandidate = candidates[0];
+            saDay.pois.splice(best.pos, 0, newPoi);
+            newPoi.plannedStartMin = best.startMin;
+            newPoi.plannedEndMin = best.endMin;
+
+            const needMin: number = this.getPoiDurationMinutes(newPoi);
+            resultText = `已将"${first.name}"添加到${saDay.label}，预计 ${formatClockTime(best.startMin)}-${formatClockTime(best.endMin)}（游玩${needMin}分钟）。`;
+
+            if (best.warnings.length > 0) {
+              resultText += ` ⚠️${best.warnings.join('；')}`;
+            }
+            const mealSugs: string[] = this.getMissingMealSuggestions(saDay);
+            if (mealSugs.length > 0) {
+              resultText += `\n💡${mealSugs.join('；')}`;
+            }
+          } else {
+            const needMin: number = this.getPoiDurationMinutes(newPoi);
+            resultText = `⚠️ ${newPoi.name}需要约${needMin}分钟，但${saDay.label}已无合适时段。建议换到其他天或调整现有行程。`;
+          }
         }
 
-        // 重算路线
+        // 重算路线 + 时间线
         await this.recalcDayRoute(saDay);
-
-        if (!first.type.includes('酒店') && !first.type.includes('宾馆') && !first.type.includes('民宿')) {
-          resultText = `已将"${first.name}"添加到${saDay.label}${autoTimeSlot ? ' ' + autoTimeSlot : ''}。${first.address ? '地址：' + first.address : ''}`;
-        }
         break;
       }
       case 'make_plan': {
@@ -916,6 +908,24 @@ export class TourGuideAgent {
             `\n\n告诉我你想去哪玩？比如"第一天去宽窄巷子"、"第二天吃火锅"～`;
         break;
       }
+      case 'set_day_bounds': {
+        const sdbDayIdx: number = parseInt(params['dayIndex'] ?? '0');
+        if (sdbDayIdx < 0 || sdbDayIdx >= this.plan.dailyPlans.length) {
+          resultText = `第${sdbDayIdx + 1}天不存在。`;
+          break;
+        }
+        const startHour: number = parseInt(params['dayStartHour'] ?? '0');
+        const endHour: number = parseInt(params['dayEndHour'] ?? '0');
+        const sdbDay: TourDay = this.plan.dailyPlans[sdbDayIdx];
+        if (startHour > 0 && startHour <= 24) sdbDay.dayStartMin = startHour * 60;
+        if (endHour > 0 && endHour <= 24) sdbDay.dayEndMin = endHour * 60;
+        this.calculateTimeline(sdbDay);
+        await this.recalcDayRoute(sdbDay);
+        const dsLabel: string = sdbDay.dayStartMin ? formatClockTime(sdbDay.dayStartMin) : '默认';
+        const deLabel: string = sdbDay.dayEndMin ? formatClockTime(sdbDay.dayEndMin) : '默认';
+        resultText = `${sdbDay.label}时间已设为 ${dsLabel}-${deLabel}。`;
+        break;
+      }
       case 'get_weather': {
         resultText = `${params['city'] || this.plan.city}近日天气：晴转多云 20-28°C（参考）。`;
         break;
@@ -942,7 +952,7 @@ export class TourGuideAgent {
         for (const day of this.plan.dailyPlans) {
           for (const poi of day.pois) {
             // 跳过起终点标记（出发/返回/入住），这些不是实际消费项
-            if (poi.timeSlot === '出发' || poi.timeSlot === '返回' || poi.timeSlot === '入住' || poi.timeSlot === '到达') continue;
+            if (isMarkerPoi(poi)) continue;
             const t: string = poi.type || '';
             if (t.includes('酒店') || t.includes('住宿')) {
               // 本地人不需要酒店花费
@@ -1031,34 +1041,59 @@ export class TourGuideAgent {
           break;
         }
 
-        // 标准化日期为 YYYY-MM-DD（API 需要此格式）
+        // 标准化日期
         const normalizedDate: string = this.normalizeDate(stDate);
 
-        // 多数据源并发查询
-        const allPromises: Object[] = await Promise.all([
-          TransportSearchService.getInstance().searchAll(stFrom, stTo, normalizedDate),
-          AmapSearchService.getInstance().searchIntercityTransport(stFrom, stTo, normalizedDate || undefined),
-        ]);
-        const webXmlResults: TransportTicketOption[] = allPromises[0] as TransportTicketOption[];
-        const amapResults: import('../services/map/AmapSearchService').IntercityTransportOption[] =
-          allPromises[1] as import('../services/map/AmapSearchService').IntercityTransportOption[];
+        // 先发起高德查询（快速返回，不受12306影响）
+        const amapPromise = AmapSearchService.getInstance()
+          .searchIntercityTransport(stFrom, stTo, normalizedDate || undefined);
 
-        // 合并 WebXml → IntercityTransportOption
-        const webXmlOptions: import('../services/map/AmapSearchService').IntercityTransportOption[] =
-          webXmlResults.map((t: TransportTicketOption) => ({
-            type: t.type,
-            trip: t.tripNo || t.type,
-            fromStation: t.fromStation || stFrom,
-            toStation: t.toStation || stTo,
-            departureTime: t.departureTime || '',
-            arrivalTime: t.arrivalTime || '',
-            duration: t.duration || 0,
-            distance: 0,
-            price: t.price || 0,
-            note: t.note || t.seatTypes || '',
-          } as import('../services/map/AmapSearchService').IntercityTransportOption));
+        // 12306 查询加 45 秒超时保护
+        const trainTimeout = new Promise<TransportTicketOption[]>((_, reject) =>
+          setTimeout(() => reject(new Error('timeout')), 45000));
+        let webXmlResults: TransportTicketOption[] = [];
+        let trainDiag: string = '';
+        try {
+          webXmlResults = await Promise.race([
+            TransportSearchService.getInstance().searchAll(stFrom, stTo, normalizedDate),
+            trainTimeout,
+          ]);
+        } catch (e) {
+          const errMsg: string = JSON.stringify(e);
+          trainDiag = errMsg.includes('timeout') ? '12306 查询超时(45s)' : '12306 异常: ' + errMsg;
+          Logger.warn(TAG, '12306 failed: %{public}s', trainDiag);
+        }
 
-        // 合并 + 去重（高德结果排前面，更可靠；WebXml 补充航班）
+        // 等高德结果
+        const amapResults = await amapPromise;
+
+        // 诊断 12306 失败原因
+        if (webXmlResults.length === 0 && !trainDiag) {
+          const fromCodes: string[] = StationCodeService.getInstance().getStationCodes(stFrom);
+          const toCodes: string[] = StationCodeService.getInstance().getStationCodes(stTo);
+          const diagParts: string[] = [];
+          if (fromCodes.length === 0) diagParts.push('出发城市未匹配车站代码');
+          if (toCodes.length === 0) diagParts.push('到达城市未匹配车站代码');
+          if (fromCodes.length > 0 && toCodes.length > 0) diagParts.push('queryG 返回空(无车次或被拦截)');
+          if (!normalizedDate) diagParts.push('日期无法解析');
+          trainDiag = diagParts.length > 0 ? diagParts.join(' | ') : '未知原因';
+        }
+
+        // 12306 → 统一格式
+        const webXmlOptions = webXmlResults.map((t: TransportTicketOption) => ({
+          type: t.type,
+          trip: t.tripNo || t.type,
+          fromStation: t.fromStation || stFrom,
+          toStation: t.toStation || stTo,
+          departureTime: t.departureTime || '',
+          arrivalTime: t.arrivalTime || '',
+          duration: t.duration || 0,
+          distance: 0,
+          price: t.price || 0,
+          note: t.note || t.seatTypes || '',
+        } as import('../services/map/AmapSearchService').IntercityTransportOption));
+
+        // 合并 + 去重（12306 结果优先，有票价）
         const allOptions: import('../services/map/AmapSearchService').IntercityTransportOption[] = [];
         const seenTrips: Set<string> = new Set();
         const addOpt = (opt: import('../services/map/AmapSearchService').IntercityTransportOption): void => {
@@ -1068,23 +1103,31 @@ export class TourGuideAgent {
             allOptions.push(opt);
           }
         };
-        for (const o of webXmlOptions) addOpt(o);  // 12306 优先，有价格
+        for (const o of webXmlOptions) addOpt(o);
         for (const o of amapResults) addOpt(o);
 
         if (allOptions.length > 0) {
           transportOptions = allOptions;
-          const detailsStr: string = allOptions.slice(0, 8).map((o, i) =>
-            `${i + 1}. ${getTransportEmoji(o.type)} ${o.trip || getTransportLabel(o.type)} ${o.fromStation}${o.departureTime ? ' ' + o.departureTime : ''}→${o.toStation}${o.arrivalTime ? ' ' + o.arrivalTime : ''}${o.price > 0 ? ' ¥' + o.price : ''}`
-          ).join('\n');
-          const hasFlight: boolean = allOptions.some(o => o.type === 'flight');
-          const srcLabel: string = hasFlight ? '（含航班）' : '';
-          resultText = `${stFrom}→${stTo}${stDate ? '（' + stDate + '）' : ''}查到${allOptions.length}个方案${srcLabel}：\n${detailsStr}`;
-          Logger.info(TAG, 'Transport search: %{public}d options (%{public}d Amap + %{public}d WebXml)',
-            allOptions.length, amapResults.length, webXmlOptions.length);
+          const has12306: boolean = webXmlOptions.length > 0;
+
+          const detailsStr: string = allOptions.slice(0, 8).map((o, i) => {
+            let priceStr: string = '';
+            if (o.price > 0) {
+              priceStr = ' ¥' + o.price;
+            } else if (has12306 && o.type !== 'flight' && o.type !== 'bus') {
+              priceStr = ' [价格待查]';
+            }
+            return `${i + 1}. ${getTransportEmoji(o.type)} ${o.trip || getTransportLabel(o.type)} ${o.fromStation}${o.departureTime ? ' ' + o.departureTime : ''}→${o.toStation}${o.arrivalTime ? ' ' + o.arrivalTime : ''}${priceStr}`;
+          }).join('\n');
+
+          const srcNote: string = has12306 ? '（12306实时数据）' : '（高德方案，建议到12306确认）';
+          const diagNote: string = (!has12306 && trainDiag) ? '\n🔍 12306诊断：' + trainDiag : '';
+          resultText = `${stFrom}→${stTo}${stDate ? '（' + stDate + '）' : ''}查到${allOptions.length}个方案${srcNote}：\n${detailsStr}${diagNote}`;
+          Logger.info(TAG, 'Transport: %{public}d options (%{public}d 12306 + %{public}d Amap)',
+            allOptions.length, webXmlOptions.length, amapResults.length);
         } else {
-          // 所有数据源均无结果 → 诚实告知，不编造
-          resultText = `暂未查到${stFrom}到${stTo}${stDate ? '（' + stDate + '）' : ''}的实时方案。建议到12306或携程App查询实时票价和时刻。`;
-          Logger.info(TAG, 'Transport search: no results from any source for %{public}s→%{public}s', stFrom, stTo);
+          resultText = `暂未查到${stFrom}到${stTo}${stDate ? '（' + stDate + '）' : ''}的实时方案。建议到12306或携程App查询。`;
+          Logger.info(TAG, 'Transport: no results for %{public}s→%{public}s', stFrom, stTo);
         }
         markers = undefined;
         break;
@@ -1189,31 +1232,51 @@ export class TourGuideAgent {
 
         const newPoi: TourPoiItem = {
           name: poiName, lat: poiLat, lng: poiLng,
-          type: poiType, timeSlot: poiTimeSlot, duration: '1-2h', note: poiNote
+          type: poiType, timeSlot: '', duration: '1-2h', note: poiNote,
+          durationMinutes: this.parseDurationMinutes('1-2h'),
         };
 
         const day: TourDay = this.plan.dailyPlans[dayIdx];
+
         if (insertPos >= 0 && insertPos < day.pois.length) {
           day.pois.splice(insertPos, 0, newPoi);
         } else {
-          // 插入到酒店返回之前（即最后一个酒店住宿之前）
-          let inserted: boolean = false;
-          for (let i: number = day.pois.length - 1; i >= 0; i--) {
-            if (day.pois[i].type.includes('酒店') && day.pois[i].timeSlot === '返回') {
-              day.pois.splice(i, 0, newPoi);
-              inserted = true;
-              break;
+          // 基于时间的智能插入
+          let bestPos: number = day.pois.length;
+          let bestStart: number = 0;
+          let bestEnd: number = 0;
+          let bestScore: number = -Infinity;
+
+          for (let candPos: number = -1; candPos < day.pois.length; candPos++) {
+            const check: ReturnType<typeof this.timeFeasibilityCheck> = this.timeFeasibilityCheck(day, newPoi, candPos);
+            if (check.feasible) {
+              let score: number = 24 * 60 - check.startMin;
+              if (score > bestScore) {
+                bestScore = score;
+                bestPos = candPos + 1;
+                bestStart = check.startMin;
+                bestEnd = check.endMin;
+              }
             }
           }
-          if (!inserted) {
+
+          if (bestScore > -Infinity) {
+            day.pois.splice(bestPos, 0, newPoi);
+            newPoi.plannedStartMin = bestStart;
+            newPoi.plannedEndMin = bestEnd;
+          } else {
             day.pois.push(newPoi);
+            Logger.warn(TAG, poiName + ' 无法找到合适时段，强制加到' + day.label + '末尾');
           }
         }
 
-        // 重新计算该天路线
         await this.recalcDayRoute(day);
 
-        resultText = `已将"${poiName}"添加到${day.label}${poiTimeSlot ? ' ' + poiTimeSlot : ''}。`;
+        const needMin: number = this.getPoiDurationMinutes(newPoi);
+        const timeDisplay: string = (newPoi.plannedStartMin !== undefined && newPoi.plannedEndMin !== undefined)
+          ? ' ' + formatClockTime(newPoi.plannedStartMin) + '-' + formatClockTime(newPoi.plannedEndMin)
+          : (poiTimeSlot ? ' ' + poiTimeSlot : '');
+        resultText = '已将"' + poiName + '"添加到' + day.label + timeDisplay + '（游玩' + needMin + '分钟）。';
         break;
       }
       case 'remove_poi_from_day': {
@@ -1283,6 +1346,8 @@ export class TourGuideAgent {
     // 兼容: AI 可能用 budget 代替 amount
     if (tc.budget) p['amount'] = tc.budget;
     if (tc.date) p['date'] = tc.date;
+    if (tc.dayStartHour) p['dayStartHour'] = tc.dayStartHour;
+    if (tc.dayEndHour) p['dayEndHour'] = tc.dayEndHour;
     return p;
   }
 
@@ -1293,7 +1358,7 @@ export class TourGuideAgent {
       if (tc.action === 'make_plan' || tc.action === 'add_poi_to_day' ||
           tc.action === 'remove_poi_from_day' || tc.action === 'search_and_add' ||
           tc.action === 'estimate_costs' || tc.action === 'set_transport' ||
-          tc.action === 'set_budget') return true;
+          tc.action === 'set_budget' || tc.action === 'set_day_bounds') return true;
     }
     return false;
   }
@@ -1479,26 +1544,44 @@ export class TourGuideAgent {
     return date; // 无法解析则原样返回
   }
 
-  /** 后台静默重算预算 — 供 UI 和 agent 上下文使用，不打断对话 */
+  /** 统一的 POI 费用估算 — 唯一真相来源，search_and_add 和后台重算共用 */
+  private estimatePoiCost(poiType: string, cityMultiplier: number): number | undefined {
+    if (!poiType) return undefined;
+    const t: string = poiType;
+    if (t.includes('酒店') || t.includes('宾馆') || t.includes('民宿') || t.includes('住宿'))
+      return Math.round(300 * cityMultiplier);
+    if (t.includes('餐厅') || t.includes('美食') || t.includes('小吃') || t.includes('咖啡') || t.includes('茶'))
+      return Math.round(80 * cityMultiplier);
+    if (t.includes('景点') || t.includes('公园') || t.includes('风景') || t.includes('博物馆'))
+      return Math.round(60 * cityMultiplier);
+    if (t.includes('购物') || t.includes('商场'))
+      return Math.round(100 * cityMultiplier);
+    if (t.includes('飞机'))
+      return Math.round(800 * cityMultiplier);
+    if (t.includes('高铁') || t.includes('火车') || t.includes('动车'))
+      return Math.round(500 * cityMultiplier);
+    if (t.includes('大巴') || t.includes('客车'))
+      return Math.round(200 * cityMultiplier);
+    return undefined;
+  }
+
+  /** 后台静默重算预算 */
   private silentRecalcCosts(): void {
     if (!this.plan.totalBudget) return;
-    const costMul: number = TourGuideAgent.getCityCostMultiplier(this.plan.city);
+    const cm: number = TourGuideAgent.getCityCostMultiplier(this.plan.city);
     for (const day of this.plan.dailyPlans) {
       for (const poi of day.pois) {
-        if (poi.timeSlot === '出发' || poi.timeSlot === '返回' || poi.timeSlot === '入住' || poi.timeSlot === '到达') continue;
+        if (isMarkerPoi(poi)) continue;
         const t: string = poi.type || '';
         if (t.includes('酒店') || t.includes('住宿')) {
-          poi.estimatedCost = this.isLocalTrip() ? 0 : Math.round((this.plan.hotel ? 300 : 200) * costMul);
-        } else if (t.includes('餐厅') || t.includes('美食') || t.includes('小吃') || t.includes('咖啡')) {
-          poi.estimatedCost = Math.round(80 * costMul);
-        } else if (poi.timeSlot.includes('餐')) {
-          poi.estimatedCost = Math.round(80 * costMul);
+          poi.estimatedCost = this.isLocalTrip() ? 0 : Math.round(300 * cm);
         } else if (t.includes('交通') || t.includes('飞机') || t.includes('高铁') || t.includes('火车')) {
-          poi.estimatedCost = this.isLocalTrip() ? 0 : Math.round((t.includes('飞机') ? 800 : (t.includes('高铁') ? 500 : 200)) * costMul);
-        } else if (t.includes('景点') || t.includes('公园') || t.includes('风景') || t.includes('博物馆')) {
-          poi.estimatedCost = Math.round(60 * costMul);
-        } else if (t.includes('购物') || t.includes('商场')) {
-          poi.estimatedCost = Math.round(100 * costMul);
+          poi.estimatedCost = this.isLocalTrip() ? 0 : (this.estimatePoiCost(t, cm) ?? 0);
+        } else if (poi.timeSlot.includes('餐')) {
+          poi.estimatedCost = Math.round(80 * cm);
+        } else {
+          const cost: number | undefined = this.estimatePoiCost(t, cm);
+          if (cost !== undefined) poi.estimatedCost = cost;
         }
       }
     }
@@ -1512,65 +1595,141 @@ export class TourGuideAgent {
         this.plan.transportBack.cost = tb === 'flight' ? 800 : (tb === 'high_speed_rail' ? 500 : (tb === 'train' ? 200 : 100));
       }
       if (this.plan.hotel && (!this.plan.hotel.estimatedCost || this.plan.hotel.estimatedCost <= 0)) {
-        this.plan.hotel.estimatedCost = Math.round(this.plan.days * 300 * costMul);
+        this.plan.hotel.estimatedCost = Math.round(this.plan.days * 300 * cm);
       }
     }
   }
 
-  /** 时间槽优先级（辅助排序） */
-  private getSlotPriority(slot: string, map: Record<string, number>): number {
-    if (!slot) return 15; // 无时间槽 → 放中间
-    for (const key of Object.keys(map)) {
-      if (slot.includes(key)) return map[key];
+  // ========== 关键词精简 ==========
+
+  /** 逐级精简搜索关键词：去修饰词 → 前缀 → 核心片段 */
+  private simplifyKeywords(kw: string): string[] {
+    const result: string[] = [];
+    // 去修饰词：的/附近/好吃/好玩/怎么/哪里/推荐/必去/网红
+    let cleaned: string = kw.replace(/[的之]|附近|好吃|好玩|怎么|哪里|推荐|必去|网红|最有名|出名/g, '');
+    if (cleaned !== kw && cleaned.length >= 2) result.push(cleaned);
+    // 取前2字
+    if (kw.length > 2) result.push(kw.substring(0, 2));
+    // 取后2字（有时核心词在后面）
+    if (kw.length > 3) {
+      const last2: string = kw.substring(kw.length - 2);
+      if (!result.includes(last2)) result.push(last2);
     }
-    return 15;
-  }
-
-  /** 自动分配下一个可用时间段 */
-  private nextTimeSlot(day: TourDay): string {
-    const defaultSlots: string[] = ['早餐7:30', '上午9:00', '午餐12:00', '下午14:00', '晚餐18:00', '晚上20:00'];
-    const usedSlots: Set<string> = new Set(day.pois.map((p) => p.timeSlot));
-    for (const s of defaultSlots) {
-      if (!usedSlots.has(s)) return s;
+    // 取前3字
+    if (kw.length > 3) {
+      const first3: string = kw.substring(0, 3);
+      if (!result.includes(first3)) result.push(first3);
     }
-    return '上午10:00'; // fallback
-  }
-
-  /** Fisher-Yates 洗牌，随机打乱数组 */
-  private shuffleArray(arr: Object[]): void {
-    for (let i: number = arr.length - 1; i > 0; i--) {
-      const j: number = Math.floor(Math.random() * (i + 1));
-      const tmp: Object = arr[i];
-      arr[i] = arr[j];
-      arr[j] = tmp;
+    // 如果清理后还有至少2个字的不同版本
+    if (cleaned.length > 3 && cleaned !== kw) {
+      result.push(cleaned.substring(0, 2));
+      result.push(cleaned.substring(0, 3));
     }
+    // 去重
+    return [...new Set(result.filter(k => k.length >= 2))];
   }
 
-  private autoMode(lat1: number, lng1: number, lat2: number, lng2: number): DirectionMode {
-    const dist: number = haversineDistance(lat1, lng1, lat2, lng2);
-    if (dist < 1000) return DirectionMode.WALKING;
-    return DirectionMode.DRIVING;
+  // ========== 时间计算工具函数 ==========
+
+  /** 解析停留时间字符串为分钟数 */
+  private parseDurationMinutes(dur: string): number {
+    if (!dur || dur.length === 0) return 90;
+    const hMatch: RegExpMatchArray | null = dur.match(/(\d+(?:\.\d+)?)\s*h/);
+    const hMatchCN: RegExpMatchArray | null = dur.match(/(\d+(?:\.\d+)?)\s*小时/);
+    const mMatch: RegExpMatchArray | null = dur.match(/(\d+)\s*min/);
+    const mMatchCN: RegExpMatchArray | null = dur.match(/(\d+)\s*分钟/);
+    let mins: number = 0;
+    if (hMatch) mins += parseFloat(hMatch[1]) * 60;
+    else if (hMatchCN) mins += parseFloat(hMatchCN[1]) * 60;
+    if (mMatch) mins += parseInt(mMatch[1]);
+    else if (mMatchCN) mins += parseInt(mMatchCN[1]);
+    if (mins === 0) {
+      const rangeH = dur.match(/(\d+)\s*-\s*(\d+)\s*h/);
+      const rangeHCN = dur.match(/(\d+)\s*-\s*(\d+)\s*小时/);
+      if (rangeH) mins = parseInt(rangeH[2]) * 60;
+      else if (rangeHCN) mins = parseInt(rangeHCN[2]) * 60;
+      else if (dur.includes('半天')) mins = 240;
+      else mins = 90;
+    }
+    return mins;
   }
 
-  /** 从用户输入中检测交通方式（返回字符串） */
-  private detectModeStr(input: string): string | undefined {
-    if (/地铁|公交|公交地铁|坐车|公共交通/.test(input)) return 'transit';
-    if (/开车|驾车|打车|出租车|自驾/.test(input)) return 'driving';
-    if (/走路|步行|徒步/.test(input)) return 'walking';
-    if (/骑车|骑行|自行车/.test(input)) return 'bicycling';
-    return undefined;
+  /** 获取 POI 的停留时长(分钟)，优先用已解析的字段 */
+  private getPoiDurationMinutes(poi: TourPoiItem): number {
+    if (poi.durationMinutes && poi.durationMinutes > 0) return poi.durationMinutes;
+    const parsed: number = this.parseDurationMinutes(poi.duration);
+    poi.durationMinutes = parsed;
+    return parsed;
   }
 
-  /** 从用户输入中检测偏好的交通方式 */
-  private detectMode(input: string): DirectionMode | undefined {
-    if (/地铁|公交|公交地铁|坐车|公共交通/.test(input)) return DirectionMode.TRANSIT;
-    if (/开车|驾车|打车|出租车|自驾/.test(input)) return DirectionMode.DRIVING;
-    if (/走路|步行|徒步/.test(input)) return DirectionMode.WALKING;
-    if (/骑车|骑行|自行车/.test(input)) return DirectionMode.BICYCLING;
-    return undefined; // 未指定→自动选择
+  /** 估算两个坐标间的路程耗时(分钟) — 混合模式 */
+  private async estimateTravelMinutes(
+    fromLat: number, fromLng: number, toLat: number, toLng: number,
+    mode?: string, city?: string
+  ): Promise<number> {
+    const dist: number = haversineDistance(fromLat, fromLng, toLat, toLng);
+    let estMin: number;
+    if (mode === 'walking') estMin = Math.ceil(dist / 5000 * 60);
+    else if (mode === 'bicycling') estMin = Math.ceil(dist / 15000 * 60);
+    else estMin = Math.ceil(dist / 30000 * 60);
+    if (estMin < 1) estMin = 1;
+    try {
+      let dirMode: DirectionMode = DirectionMode.DRIVING;
+      if (mode === 'walking') dirMode = DirectionMode.WALKING;
+      else if (mode === 'bicycling') dirMode = DirectionMode.BICYCLING;
+      else if (mode === 'transit') dirMode = DirectionMode.TRANSIT;
+      else dirMode = this.autoMode(fromLat, fromLng, toLat, toLng);
+      const route: NavRoute | null = await AmapSearchService.getInstance().directionRouteRest(
+        fromLat, fromLng, toLat, toLng, dirMode, city
+      );
+      if (route && route.duration > 0) return Math.ceil(route.duration / 60);
+    } catch (_e) { /* fallback to estimate */ }
+    return estMin;
   }
 
-  /** 重新计算某一天的路线。失败时最多重试3次，仍失败才用直线 */
+  /** 检查时间段是否与用餐窗口重叠 */
+  private checkMealOverlap(startMin: number, endMin: number, poiType: string): string[] {
+    const warnings: string[] = [];
+    const isFood: boolean = /餐厅|美食|小吃|咖啡|茶|火锅|面馆|烧烤|早餐|午餐|晚餐|食堂|饭店/.test(poiType);
+    if (isFood) return warnings;
+    for (const mw of MEAL_WINDOWS) {
+      if (startMin <= mw.startMin && endMin >= mw.endMin) {
+        warnings.push(mw.label + '时段(' + formatClockTime(mw.startMin) + '-' + formatClockTime(mw.endMin) + ')被占用');
+      } else if (startMin >= mw.startMin && startMin < mw.endMin) {
+        warnings.push('建议在' + mw.label + '前结束(' + formatClockTime(mw.startMin) + ')');
+      } else if (endMin > mw.startMin && endMin <= mw.endMin) {
+        warnings.push('可能错过' + mw.label + '(' + formatClockTime(mw.startMin) + '-' + formatClockTime(mw.endMin) + ')');
+      }
+    }
+    return warnings;
+  }
+
+  /** 获取当天缺餐的建议 */
+  private getMissingMealSuggestions(day: TourDay): string[] {
+    const suggestions: string[] = [];
+    const hasPoiType = (keyword: string): boolean => {
+      return day.pois.some((p) => !isMarkerPoi(p) && p.type.includes(keyword));
+    };
+    for (const mw of MEAL_WINDOWS) {
+      const nearMeal: boolean = day.pois.some((p) =>
+        !isMarkerPoi(p) && p.plannedStartMin !== undefined &&
+        p.plannedStartMin < mw.endMin + 60 && p.plannedEndMin !== undefined &&
+        p.plannedEndMin > mw.startMin - 60
+      );
+      if (!nearMeal) continue;
+      if (mw.label === '早餐' && !hasPoiType('早餐') && !hasPoiType('咖啡') && !hasPoiType('早茶'))
+        suggestions.push(mw.label + '(' + formatClockTime(mw.startMin) + '-' + formatClockTime(mw.endMin) + ') — 建议安排早餐');
+      if (mw.label === '午餐' && !hasPoiType('餐厅') && !hasPoiType('美食') && !hasPoiType('小吃'))
+        suggestions.push(mw.label + '(' + formatClockTime(mw.startMin) + '-' + formatClockTime(mw.endMin) + ') — 建议安排午餐');
+      if (mw.label === '晚餐' && !hasPoiType('餐厅') && !hasPoiType('美食') && !hasPoiType('火锅') && !hasPoiType('夜市'))
+        suggestions.push(mw.label + '(' + formatClockTime(mw.startMin) + '-' + formatClockTime(mw.endMin) + ') — 建议安排晚餐');
+    }
+    return suggestions;
+  }
+
+  // ========== 路线重算 + 时间线计算 ==========
+
+  /** 重新计算某一天的路线，并存储每段耗时到 travelToMinutes */
   private async recalcDayRoute(day: TourDay): Promise<void> {
     if (day.pois.length < 2) return;
     day.route = { distance: 0, duration: 0, path: [], steps: [], origin: '', destination: '' };
@@ -1600,91 +1759,151 @@ export class TourGuideAgent {
         for (const pt of route.path) allPts.push(pt);
         day.route.distance += route.distance;
         day.route.duration += route.duration;
+        day.pois[pi + 1].travelToMinutes = Math.ceil(route.duration / 60);
       } else {
-        // 3次都失败 → 直线后备
         allPts.push({ latitude: a.lat, longitude: a.lng } as LatLng);
         allPts.push({ latitude: b.lat, longitude: b.lng } as LatLng);
+        const estDist: number = haversineDistance(a.lat, a.lng, b.lat, b.lng);
+        day.pois[pi + 1].travelToMinutes = Math.max(1, Math.ceil(estDist / 30000 * 60));
       }
     }
     day.route.path = allPts;
-    try { this.recalcDayTimeline(day); } catch (e) { /* 时间推算失败不影响路线绘制 */ }
+    try { this.calculateTimeline(day); } catch (e) { /* ignore */ }
   }
 
-  /** 根据导航路线时长计算每天各 POI 的实际时间槽 */
-  private recalcDayTimeline(day: TourDay): void {
-    if (day.pois.length < 2) return;
-    const staticSlots: string[] = ['出发', '返回', '入住'];
-    // 找第一个非标记 POI 作为时间基准
-    let baseMin: number = 9 * 60;
-    let firstIdx: number = -1;
+  /** 核心：计算每天每个 POI 的计划到达/离开时间（分钟 from midnight） */
+  /* private */ calculateTimeline(day: TourDay): void {
+    if (!day.dayStartMin) day.dayStartMin = DEFAULT_DAY_START_MIN;
+    if (!day.dayEndMin) day.dayEndMin = DEFAULT_DAY_END_MIN;
+
+    let currentMin: number = day.dayStartMin;
+
     for (let i: number = 0; i < day.pois.length; i++) {
-      if (staticSlots.indexOf(day.pois[i].timeSlot) < 0) {
-        baseMin = this.parseTimeSlotMinutes(day.pois[i].timeSlot);
-        firstIdx = i;
-        break;
-      }
-    }
-    if (firstIdx < 0) return;
-    for (let pi: number = firstIdx; pi < day.pois.length; pi++) {
-      if (staticSlots.indexOf(day.pois[pi].timeSlot) >= 0) continue;
-      if (pi === firstIdx) {
-        day.pois[pi].timeSlot = this.minutesToTimeSlot(baseMin);
+      const poi: TourPoiItem = day.pois[i];
+
+      if (isMarkerPoi(poi)) {
+        poi.plannedStartMin = currentMin;
+        poi.plannedEndMin = currentMin;
+        poi.durationMinutes = 0;
         continue;
       }
-      const prevStay: number = this.parseDurationMinutes(day.pois[pi - 1].duration);
-      const realCount: number = day.pois.filter(p => staticSlots.indexOf(p.timeSlot) < 0).length;
-      let segDur: number = 0;
-      if (day.route && day.route.duration > 0 && realCount > 1) {
-        segDur = day.route.duration / (realCount - 1);
+
+      if (!poi.durationMinutes || poi.durationMinutes <= 0) {
+        poi.durationMinutes = this.parseDurationMinutes(poi.duration);
       }
-      baseMin += prevStay + Math.ceil(segDur / 60);
-      day.pois[pi].timeSlot = this.minutesToTimeSlot(baseMin);
+
+      if (i === 0) {
+        poi.plannedStartMin = currentMin;
+        poi.travelToMinutes = 0;
+      } else {
+        if (!poi.travelToMinutes || poi.travelToMinutes <= 0) {
+          const prev: TourPoiItem = day.pois[i - 1];
+          poi.travelToMinutes = Math.max(1, Math.ceil(
+            haversineDistance(prev.lat, prev.lng, poi.lat, poi.lng) / 30000 * 60
+          ));
+        }
+        let prevEnd: number = day.dayStartMin;
+        for (let j: number = i - 1; j >= 0; j--) {
+          if (day.pois[j].plannedEndMin !== undefined && day.pois[j].plannedEndMin! > prevEnd) {
+            prevEnd = day.pois[j].plannedEndMin!;
+            break;
+          }
+        }
+        poi.plannedStartMin = prevEnd + poi.travelToMinutes;
+      }
+
+      poi.plannedEndMin = poi.plannedStartMin + poi.durationMinutes;
+
+      poi.timeSlot = formatClockTime(poi.plannedStartMin) + '-' + formatClockTime(poi.plannedEndMin);
+
+      if (poi.plannedEndMin > day.dayEndMin) {
+        Logger.warn(TAG, day.label + ' ' + poi.name + ' 结束于 ' + formatClockTime(poi.plannedEndMin) + '，超过当天 ' + formatClockTime(day.dayEndMin));
+      }
+
+      currentMin = poi.plannedEndMin;
     }
   }
 
-  /** 解析时间槽字符串为分钟数（从0点开始） */
-  private parseTimeSlotMinutes(ts: string): number {
-    if (!ts || ts.length === 0) return 9 * 60;
-    const match: RegExpMatchArray | null = ts.match(/(\d{1,2}):(\d{2})/);
-    if (match) {
-      const h: number = parseInt(match[1]) || 9;
-      const m: number = parseInt(match[2]) || 0;
-      return Math.max(0, Math.min(23 * 60 + 59, h * 60 + m));
+  /** 时间可行性检查 */
+  private timeFeasibilityCheck(
+    day: TourDay, newPoi: TourPoiItem, insertAfterIdx: number
+  ): { feasible: boolean; startMin: number; endMin: number; warnings: string[] } {
+    const warnings: string[] = [];
+    if (!day.dayStartMin) day.dayStartMin = DEFAULT_DAY_START_MIN;
+    if (!day.dayEndMin) day.dayEndMin = DEFAULT_DAY_END_MIN;
+
+    const needMin: number = this.getPoiDurationMinutes(newPoi);
+
+    let prevEndMin: number = day.dayStartMin;
+    let prevLat: number = 0;
+    let prevLng: number = 0;
+    if (insertAfterIdx >= 0 && insertAfterIdx < day.pois.length) {
+      const prev: TourPoiItem = day.pois[insertAfterIdx];
+      if (isMarkerPoi(prev)) {
+        prevEndMin = day.dayStartMin;  // 标记POI不消耗时间
+      } else {
+        prevEndMin = prev.plannedEndMin ?? day.dayStartMin;
+      }
+      prevLat = prev.lat;
+      prevLng = prev.lng;
+    } else if (day.pois.length > 0) {
+      for (let j: number = day.pois.length - 1; j >= 0; j--) {
+        if (!isMarkerPoi(day.pois[j]) && day.pois[j].plannedEndMin !== undefined) {
+          prevEndMin = day.pois[j].plannedEndMin!;
+          prevLat = day.pois[j].lat;
+          prevLng = day.pois[j].lng;
+          break;
+        }
+      }
     }
-    if (ts.includes('早餐')) return 7 * 60 + 30;
-    if (ts.includes('上午')) return 9 * 60;
-    if (ts.includes('午餐') || ts.includes('中午')) return 12 * 60;
-    if (ts.includes('下午')) return 14 * 60;
-    if (ts.includes('晚餐')) return 18 * 60;
-    if (ts.includes('晚上')) return 19 * 60;
-    return 9 * 60;
-  }
 
-  /** 解析停留时间字符串为分钟数 */
-  private parseDurationMinutes(dur: string): number {
-    if (!dur || dur.length === 0) return 90; // 默认1.5小时
-    const hMatch: RegExpMatchArray | null = dur.match(/(\d+)\s*h/);
-    const mMatch: RegExpMatchArray | null = dur.match(/(\d+)\s*min/);
-    let mins: number = 0;
-    if (hMatch) mins += parseInt(hMatch[1]) * 60;
-    if (mMatch) mins += parseInt(mMatch[1]);
-    if (mins === 0) mins = 90; // 默认
-    return mins;
-  }
+    let nextStartMin: number = day.dayEndMin;
+    let nextIdx: number = day.pois.length;
+    if (insertAfterIdx >= 0 && insertAfterIdx + 1 < day.pois.length) {
+      for (let j: number = insertAfterIdx + 1; j < day.pois.length; j++) {
+        if (!isMarkerPoi(day.pois[j]) && day.pois[j].plannedStartMin !== undefined) {
+          nextStartMin = day.pois[j].plannedStartMin!;
+          nextIdx = j;
+          break;
+        }
+      }
+    }
 
-  /** 将分钟数转为中文时间槽字符串 */
-  private minutesToTimeSlot(mins: number): string {
-    const total: number = mins % (24 * 60);
-    const h: number = Math.floor(total / 60);
-    const m: number = total % 60;
-    const timeStr: string = `${h}:${String(m).padStart(2, '0')}`;
-    if (h < 6) return '凌晨' + timeStr;
-    if (h < 9) return '早餐' + timeStr;
-    if (h < 11) return '上午' + timeStr;
-    if (h < 13) return '午餐' + timeStr;
-    if (h < 17) return '下午' + timeStr;
-    if (h < 20) return '晚餐' + timeStr;
-    return '晚上' + timeStr;
+    let travelToNew: number = 20;
+    let travelFromNew: number = 20;
+    if (prevLat !== 0 && prevLng !== 0 && newPoi.lat !== 0 && newPoi.lng !== 0) {
+      const distTo: number = haversineDistance(prevLat, prevLng, newPoi.lat, newPoi.lng);
+      travelToNew = Math.max(1, Math.ceil(distTo / 30000 * 60));
+      if (nextIdx < day.pois.length) {
+        const next: TourPoiItem = day.pois[nextIdx];
+        const distFrom: number = haversineDistance(newPoi.lat, newPoi.lng, next.lat, next.lng);
+        travelFromNew = Math.max(1, Math.ceil(distFrom / 30000 * 60));
+      } else {
+        travelFromNew = 0;
+      }
+    }
+
+    const totalNeed: number = travelToNew + needMin + travelFromNew;
+    const gapSize: number = nextStartMin - prevEndMin;
+
+    if (totalNeed > gapSize) {
+      return {
+        feasible: false, startMin: 0, endMin: 0,
+        warnings: ['时间不够: 需要' + totalNeed + '分钟(路程' + (travelToNew + travelFromNew) + 'min + 游玩' + needMin + 'min)，但间隙仅' + gapSize + '分钟']
+      };
+    }
+
+    const startMin: number = prevEndMin + travelToNew;
+    const endMin: number = startMin + needMin;
+
+    const mealWarns: string[] = this.checkMealOverlap(startMin, endMin, newPoi.type);
+    for (const w of mealWarns) warnings.push(w);
+
+    if (endMin > day.dayEndMin) {
+      warnings.push('结束时间 ' + formatClockTime(endMin) + ' 超过当天 ' + formatClockTime(day.dayEndMin));
+    }
+
+    return { feasible: true, startMin, endMin, warnings };
   }
 
   /** 解析 AI 回复中的工具调用 — 支持数组和单对象两种格式 */

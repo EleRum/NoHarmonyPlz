@@ -14,7 +14,7 @@ import { MapJsBridge } from '../services/map/MapJsBridge';
 import {
   LatLng, MapInitConfig, NavRoute, DirectionMode, PoiResult
 } from '../services/map/MapTypes';
-import { TourPlan, TourDay, InterCityTransport, getBudgetBreakdown, getTransportEmoji, getTransportLabel, migrateTourPlan } from '../model/TourPlan';
+import { TourPlan, TourDay, InterCityTransport, getBudgetBreakdown, getTransportEmoji, getTransportLabel, migrateTourPlan, formatClockTime, isMarkerPoi } from '../model/TourPlan';
 import { IntercityTransportOption } from '../services/map/AmapSearchService';
 import { UserBasicInfo } from '../model/UserBasicInfo';
 import { Dao } from '../database/Dao';
@@ -695,6 +695,19 @@ export struct TourGuideContent {
     return '📍';
   }
 
+  /** 格式化 POI 时间显示：优先用 plannedStartMin/plannedEndMin，降级到 timeSlot */
+  private formatPoiTime(poi: import('../model/TourPlan').TourPoiItem): string {
+    if (poi.plannedStartMin !== undefined && poi.plannedEndMin !== undefined) {
+      const start: string = formatClockTime(poi.plannedStartMin);
+      const end: string = formatClockTime(poi.plannedEndMin);
+      return `${start}-${end}`;
+    }
+    if (poi.timeSlot && poi.timeSlot.length > 0) {
+      return poi.timeSlot;
+    }
+    return '';
+  }
+
   /** 计算已花费总额 */
   private calcSpentTotal(): number {
     const br = this.plan ? getBudgetBreakdown(this.plan) : null;
@@ -814,13 +827,13 @@ export struct TourGuideContent {
               Row() {
                 ForEach(
                   this.plan.dailyPlans[this.selectedDayIndex].pois.filter((p: import('../model/TourPlan').TourPoiItem) =>
-                    p.timeSlot !== '出发' && p.timeSlot !== '返回' && p.timeSlot !== '到达'),
+                    !isMarkerPoi(p)),
                   (poi: import('../model/TourPlan').TourPoiItem, pidx: number) => {
                   Column() {
                     Text(this.poiEmoji(poi.type)).fontSize(20)
                     Text(poi.name).fontSize(9).fontColor(getTheme(this.themeMode).textSecondary).maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
-                    Text(poi.timeSlot).fontSize(8).fontColor(getTheme(this.themeMode).textSecondary)
+                    Text(this.formatPoiTime(poi)).fontSize(8).fontColor(getTheme(this.themeMode).textSecondary)
                     if (poi.estimatedCost && poi.estimatedCost > 0) {
                       Text(`¥${poi.estimatedCost}`).fontSize(8).fontColor('#F59E0B')
                     }

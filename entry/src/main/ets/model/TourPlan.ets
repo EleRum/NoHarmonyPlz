@@ -35,7 +35,7 @@ export interface TourPoiItem {
   lng: number;
   /** 景点/酒店/餐厅/购物/交通 */
   type: string;
-  /** 时间段描述，如 "上午9:00-11:00" */
+  /** 时间段描述，如 "上午9:00-11:00"（显示标签，可退化） */
   timeSlot: string;
   /** 建议停留时长 */
   duration: string;
@@ -45,6 +45,14 @@ export interface TourPoiItem {
   mode?: string;
   /** 预估人均花费(元) */
   estimatedCost?: number;
+  /** 解析后的停留时长(分钟)，默认90 */
+  durationMinutes?: number;
+  /** 计划到达分钟(从0点起算)，由 calculateTimeline 自动填充 */
+  plannedStartMin?: number;
+  /** 计划离开分钟(从0点起算) */
+  plannedEndMin?: number;
+  /** 从上一个POI到此的路程耗时(分钟)，由 recalcDayRoute 填充 */
+  travelToMinutes?: number;
 }
 
 /** 一天行程 */
@@ -56,6 +64,10 @@ export interface TourDay {
   pois: TourPoiItem[];
   /** 该天路线 */
   route: NavRoute | null;
+  /** 当天活动起始分钟(默认480=8:00) */
+  dayStartMin?: number;
+  /** 当天活动结束分钟(默认1260=21:00) */
+  dayEndMin?: number;
 }
 
 /** 完整旅游计划 */
@@ -151,8 +163,8 @@ export function getBudgetBreakdown(plan: TourPlan): BudgetBreakdown {
     for (const poi of day.pois) {
       const c: number = poi.estimatedCost ?? 0;
       const t: string = poi.type || '';
-      // 跳过标记类型：酒店由 plan.hotel.estimatedCost 统一表达，到达/出发/返回为路线标记
-      if (t.includes('酒店') || t.includes('住宿') || poi.timeSlot === '到达' || poi.timeSlot === '出发' || poi.timeSlot === '返回') {
+      // 跳过标记类型：酒店由 plan.hotel.estimatedCost 统一表达，标记POI为路线锚点
+      if (t.includes('酒店') || t.includes('住宿') || isMarkerPoi(poi)) {
         continue;
       } else if (t.includes('餐厅') || t.includes('美食') || t.includes('小吃') || t.includes('咖啡') || t.includes('茶')) {
         food += c;
@@ -197,3 +209,37 @@ export function getTransportLabel(type: string): string {
     default: return '交通';
   }
 }
+
+/** 将分钟数(从0点)格式化为 HH:MM 时钟时间 */
+export function formatClockTime(mins: number): string {
+  const total: number = mins % (24 * 60);
+  const h: number = Math.floor(total / 60);
+  const m: number = total % 60;
+  return `${h}:${String(m).padStart(2, '0')}`;
+}
+
+/** 旧版 POI timeSlot 中的标记值 */
+const MARKER_SLOTS: Set<string> = new Set(['出发', '返回', '到达', '入住']);
+
+/** 检查 POI 是否为内部标记（非用户可见景点） */
+export function isMarkerPoi(poi: TourPoiItem): boolean {
+  return MARKER_SLOTS.has(poi.timeSlot);
+}
+
+/** 默认每天起始分钟 */
+export const DEFAULT_DAY_START_MIN: number = 480;  // 8:00
+/** 默认每天结束分钟 */
+export const DEFAULT_DAY_END_MIN: number = 1260;   // 21:00
+
+/** 用餐窗口定义 */
+export interface MealWindow {
+  label: string;
+  startMin: number;
+  endMin: number;
+}
+
+export const MEAL_WINDOWS: MealWindow[] = [
+  { label: '早餐', startMin: 420, endMin: 540 },   // 7:00-9:00
+  { label: '午餐', startMin: 690, endMin: 810 },   // 11:30-13:30
+  { label: '晚餐', startMin: 1050, endMin: 1200 }, // 17:30-20:00
+];

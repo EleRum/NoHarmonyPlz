@@ -77,9 +77,9 @@ export class TransportSearchService {
       return [];
     }
 
-    // 每个站对独立会话，init+queryG 在同一个 http 请求周期内完成
-    const maxFrom: number = Math.min(3, fromCodes.length);
-    const maxTo: number = Math.min(3, toCodes.length);
+    // 只取主站查询（减少12306请求量，避免触发限流）
+    const maxFrom: number = Math.min(1, fromCodes.length);
+    const maxTo: number = Math.min(1, toCodes.length);
     const allOptions: TicketOption[] = [];
     const seenTrips: Set<string> = new Set();
 
@@ -141,92 +141,110 @@ export class TransportSearchService {
     return allOptions;
   }
 
-  /** 调用 12306 queryG — init+queryG 在同一 http 会话内 */
+  /** 调用 12306 queryG — init+queryG 在同一 http 会话内，最多重试2次 */
   private async query12306(fromCode: string, toCode: string, date: string): Promise<TicketOption[]> {
-    const req: http.HttpRequest = http.createHttp();
-    try {
-      await req.request('https://kyfw.12306.cn/otn/leftTicket/init', {
-        method: http.RequestMethod.GET,
-        header: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept-Language': 'zh-CN,zh;q=0.9' },
-        connectTimeout: 15000, readTimeout: 20000,
-      } as http.HttpRequestOptions);
+    let lastErr: string = '';
+    for (let retry: number = 0; retry < 2; retry++) {
+      const req: http.HttpRequest = http.createHttp();
+      try {
+        await req.request('https://kyfw.12306.cn/otn/leftTicket/init', {
+          method: http.RequestMethod.GET,
+          header: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept-Language': 'zh-CN,zh;q=0.9' },
+          connectTimeout: 15000, readTimeout: 20000,
+        } as http.HttpRequestOptions);
 
-      const url: string =
-        'https://kyfw.12306.cn/otn/leftTicket/queryG' +
-        `?leftTicketDTO.train_date=${encodeURIComponent(date)}` +
-        `&leftTicketDTO.from_station=${encodeURIComponent(fromCode)}` +
-        `&leftTicketDTO.to_station=${encodeURIComponent(toCode)}` +
-        '&purpose_codes=ADULT';
+        const url: string =
+          'https://kyfw.12306.cn/otn/leftTicket/queryG' +
+          `?leftTicketDTO.train_date=${encodeURIComponent(date)}` +
+          `&leftTicketDTO.from_station=${encodeURIComponent(fromCode)}` +
+          `&leftTicketDTO.to_station=${encodeURIComponent(toCode)}` +
+          '&purpose_codes=ADULT';
 
-      const resp: http.HttpResponse = await req.request(url, {
-        method: http.RequestMethod.GET,
-        header: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept': 'application/json, text/javascript',
-          'Referer': 'https://kyfw.12306.cn/otn/leftTicket/init',
-          'Accept-Language': 'zh-CN,zh;q=0.9',
-        },
-        connectTimeout: 15000, readTimeout: 20000,
-      } as http.HttpRequestOptions);
+        const resp: http.HttpResponse = await req.request(url, {
+          method: http.RequestMethod.GET,
+          header: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json, text/javascript',
+            'Referer': 'https://kyfw.12306.cn/otn/leftTicket/init',
+            'Accept-Language': 'zh-CN,zh;q=0.9',
+          },
+          connectTimeout: 15000, readTimeout: 20000,
+        } as http.HttpRequestOptions);
 
-      if (resp.responseCode !== 200 || !resp.result) throw new Error(`HTTP ${resp.responseCode}`);
+        if (resp.responseCode !== 200 || !resp.result) throw new Error(`HTTP ${resp.responseCode}`);
 
-      const resultStr: string = typeof resp.result === 'string' ? resp.result : JSON.stringify(resp.result);
-      const json: Record<string, Object> = JSON.parse(resultStr) as Record<string, Object>;
-      if (((json['httpstatus'] as number) ?? 200) !== 200) throw new Error('12306 rejected');
+        const resultStr: string = typeof resp.result === 'string' ? resp.result : JSON.stringify(resp.result);
+        const json: Record<string, Object> = JSON.parse(resultStr) as Record<string, Object>;
+        if (((json['httpstatus'] as number) ?? 200) !== 200) throw new Error('12306 rejected');
 
-      const data: Record<string, Object> = json['data'] as Record<string, Object>;
-      const resultArr: string[] = (data?.['result'] as string[]) ?? [];
-      if (resultArr.length === 0) Logger.warn(TAG, '12306 returned 0 results for %{public}s→%{public}s', fromCode, toCode);
+        const data: Record<string, Object> = json['data'] as Record<string, Object>;
+        const resultArr: string[] = (data?.['result'] as string[]) ?? [];
+        if (resultArr.length === 0) Logger.warn(TAG, '12306 returned 0 results for %{public}s→%{public}s', fromCode, toCode);
 
-      return this.parse12306Result(resultArr, fromCode, toCode);
-    } finally {
-      req.destroy();
+        return this.parse12306Result(resultArr, fromCode, toCode);
+      } catch (e) {
+        lastErr = JSON.stringify(e);
+        Logger.warn(TAG, '12306 queryG attempt %{public}d/3 failed %{public}s→%{public}s: %{public}s',
+          retry + 1, fromCode, toCode, lastErr);
+      } finally {
+        req.destroy();
+      }
+      if (retry < 1) await new Promise<void>((r) => setTimeout(r, 800));
     }
+    Logger.error(TAG, '12306 queryG all attempts failed %{public}s→%{public}s', fromCode, toCode);
+    return [];
   }
 
-  /** 查询 12306 票价。价格格式: 整数/10=元 */
+  /** 查询 12306 票价。价格格式: 整数/10=元。最多重试2次 */
   private async query12306Prices(fromCode: string, toCode: string, date: string):
     Promise<Record<string, TicketPrice>> {
-    const req: http.HttpRequest = http.createHttp();
-    try {
-      await req.request('https://kyfw.12306.cn/otn/leftTicket/init', {
-        method: http.RequestMethod.GET,
-        header: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept-Language': 'zh-CN,zh;q=0.9' },
-        connectTimeout: 15000, readTimeout: 20000,
-      } as http.HttpRequestOptions);
+    for (let retry: number = 0; retry < 2; retry++) {
+      const req: http.HttpRequest = http.createHttp();
+      try {
+        await req.request('https://kyfw.12306.cn/otn/leftTicket/init', {
+          method: http.RequestMethod.GET,
+          header: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept-Language': 'zh-CN,zh;q=0.9' },
+          connectTimeout: 15000, readTimeout: 20000,
+        } as http.HttpRequestOptions);
 
-      const url: string = 'https://kyfw.12306.cn/otn/leftTicketPrice/queryAllPublicPrice' +
-        `?leftTicketDTO.train_date=${encodeURIComponent(date)}` +
-        `&leftTicketDTO.from_station=${encodeURIComponent(fromCode)}` +
-        `&leftTicketDTO.to_station=${encodeURIComponent(toCode)}&purpose_codes=ADULT`;
+        const url: string = 'https://kyfw.12306.cn/otn/leftTicketPrice/queryAllPublicPrice' +
+          `?leftTicketDTO.train_date=${encodeURIComponent(date)}` +
+          `&leftTicketDTO.from_station=${encodeURIComponent(fromCode)}` +
+          `&leftTicketDTO.to_station=${encodeURIComponent(toCode)}&purpose_codes=ADULT`;
 
-      const resp: http.HttpResponse = await req.request(url, {
-        method: http.RequestMethod.GET,
-        header: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': 'application/json', 'Referer': 'https://kyfw.12306.cn/otn/leftTicket/init', 'Accept-Language': 'zh-CN,zh;q=0.9' },
-        connectTimeout: 15000, readTimeout: 20000,
-      } as http.HttpRequestOptions);
+        const resp: http.HttpResponse = await req.request(url, {
+          method: http.RequestMethod.GET,
+          header: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': 'application/json', 'Referer': 'https://kyfw.12306.cn/otn/leftTicket/init', 'Accept-Language': 'zh-CN,zh;q=0.9' },
+          connectTimeout: 15000, readTimeout: 20000,
+        } as http.HttpRequestOptions);
 
-      if (resp.responseCode !== 200 || !resp.result) return {};
-      const resultStr: string = typeof resp.result === 'string' ? resp.result : JSON.stringify(resp.result);
-      const json: Record<string, Object> = JSON.parse(resultStr) as Record<string, Object>;
-      const dataArr: Object[] = (json['data'] as Object[]) ?? [];
-      const map: Record<string, TicketPrice> = {};
-      for (const item of dataArr) {
-        const dto: Record<string, Object> = (item as Record<string, Object>)['queryLeftNewDTO'] as Record<string, Object>;
-        if (!dto) continue;
-        const trainCode: string = (dto['station_train_code'] as string) || '';
-        if (!trainCode) continue;
-        map[trainCode] = {
-          ze: this.parsePriceField(dto['ze_price'] as string), zy: this.parsePriceField(dto['zy_price'] as string),
-          swz: this.parsePriceField(dto['swz_price'] as string), yz: this.parsePriceField(dto['yz_price'] as string),
-          yw: this.parsePriceField(dto['yw_price'] as string), rw: this.parsePriceField(dto['rw_price'] as string),
-          wz: this.parsePriceField(dto['wz_price'] as string),
-        };
+        if (resp.responseCode !== 200 || !resp.result) throw new Error(`HTTP ${resp.responseCode}`);
+        const resultStr: string = typeof resp.result === 'string' ? resp.result : JSON.stringify(resp.result);
+        const json: Record<string, Object> = JSON.parse(resultStr) as Record<string, Object>;
+        const dataArr: Object[] = (json['data'] as Object[]) ?? [];
+        const map: Record<string, TicketPrice> = {};
+        for (const item of dataArr) {
+          const dto: Record<string, Object> = (item as Record<string, Object>)['queryLeftNewDTO'] as Record<string, Object>;
+          if (!dto) continue;
+          const trainCode: string = (dto['station_train_code'] as string) || '';
+          if (!trainCode) continue;
+          map[trainCode] = {
+            ze: this.parsePriceField(dto['ze_price'] as string), zy: this.parsePriceField(dto['zy_price'] as string),
+            swz: this.parsePriceField(dto['swz_price'] as string), yz: this.parsePriceField(dto['yz_price'] as string),
+            yw: this.parsePriceField(dto['yw_price'] as string), rw: this.parsePriceField(dto['rw_price'] as string),
+            wz: this.parsePriceField(dto['wz_price'] as string),
+          };
+        }
+        Logger.info(TAG, 'Price query: %{public}d trains', Object.keys(map).length);
+        return map;
+      } catch (e) {
+        Logger.warn(TAG, '12306 price attempt %{public}d/2 failed %{public}s→%{public}s', retry + 1, fromCode, toCode);
+      } finally {
+        req.destroy();
       }
-      Logger.info(TAG, 'Price query: %{public}d trains', Object.keys(map).length);
-      return map;
-    } finally { req.destroy(); }
+      if (retry < 1) await new Promise<void>((r) => setTimeout(r, 800));
+    }
+    return {};
   }
 
   /** 解析价格字段: 12306 单位 0.1元 → "09340" = 934.0 */
@@ -345,16 +363,22 @@ export class TransportSearchService {
   /** 统一搜索：火车(12306) + 飞机(WebXml免费) */
   async searchAll(from: string, to: string, date: string): Promise<TicketOption[]> {
     const results: TicketOption[] = [];
-    // 火车：12306 官方 API — 当天全部车次
+    // 火车：12306 官方 API
     try {
       const trains: TicketOption[] = await this.searchTrainsVia12306(from, to, date);
       for (const t of trains) results.push(t);
-    } catch (_e) { /* ignore */ }
+      Logger.info(TAG, '12306: %{public}d results for %{public}s→%{public}s', trains.length, from, to);
+    } catch (e) {
+      Logger.warn(TAG, '12306 search failed for %{public}s→%{public}s: %{public}s', from, to, JSON.stringify(e));
+    }
     // 飞机：WebXml 免费接口
     try {
       const flights: TicketOption[] = await this.searchFlights(from, to, date);
       for (const f of flights) results.push(f);
-    } catch (_e) { /* ignore */ }
+    } catch (e) {
+      Logger.warn(TAG, 'Flight search failed for %{public}s→%{public}s: %{public}s', from, to, JSON.stringify(e));
+    }
+    Logger.info(TAG, 'searchAll %{public}s→%{public}s: %{public}d total', from, to, results.length);
     return results;
   }
 
