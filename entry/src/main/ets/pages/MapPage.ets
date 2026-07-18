@@ -802,23 +802,27 @@ export struct MapPage {
           try { ms.setPolylineVisible(polylineId, false); } catch (e) {}
         }
         // 路线方向标记：起点绿色、终点红色
-        if (fps.length >= 2) {
-          const startFp = fps[0];
-          const endFp = fps[fps.length - 1];
-          const startId = ms.addMarker({
-            position: { latitude: startFp.latitude, longitude: startFp.longitude },
-            iconStyle: { color: '#10B981', size: 20 },
-            title: '起点', clickable: false, zIndex: 12
-          });
-          const endId = ms.addMarker({
-            position: { latitude: endFp.latitude, longitude: endFp.longitude },
-            iconStyle: { color: '#EF4444', size: 20 },
-            title: '终点', clickable: false, zIndex: 12
-          });
-          if (ri !== this.selectedDayIndex) {
-            try { ms.setMarkerVisible(startId, false); } catch (e) {}
-            try { ms.setMarkerVisible(endId, false); } catch (e) {}
+        try {
+          if (fps.length >= 2) {
+            const startFp = fps[0];
+            const endFp = fps[fps.length - 1];
+            const startId = ms.addMarker({
+              position: { latitude: startFp.latitude, longitude: startFp.longitude },
+              iconStyle: { color: '#10B981', size: 16 },
+              title: '起点', zIndex: 12
+            });
+            const endId = ms.addMarker({
+              position: { latitude: endFp.latitude, longitude: endFp.longitude },
+              iconStyle: { color: '#EF4444', size: 16 },
+              title: '终点', zIndex: 12
+            });
+            if (ri !== this.selectedDayIndex) {
+              try { ms.setMarkerVisible(startId, false); } catch (e) {}
+              try { ms.setMarkerVisible(endId, false); } catch (e) {}
+            }
           }
+        } catch (e) {
+          Logger.warn(TAG, 'Direction markers failed: %{public}s', JSON.stringify(e));
         }
       }
 
