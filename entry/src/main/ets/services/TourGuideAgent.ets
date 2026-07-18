@@ -34,6 +34,7 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
 2. 出发地+日期已知 → search_transport 查交通
 3. 交通搞定 → 问经费预算（用户说出数字才 set_budget！）
 4. 天数+交通+预算齐 → 问用户是否创建行程 → 用户同意 → make_plan
+- 用户问天气/查天气 → get_weather，下雨时主动推荐室内景点
 5. 计划创建后 → 等用户指定景点 → search_and_add
 6. 用户说调整起止时间 → set_day_bounds
 
@@ -1438,6 +1439,86 @@ export class TourGuideAgent {
         await this.recalcDayRoute(rmDay);
 
         resultText = `已从${rmDay.label}删除"${removed.name}"。`;
+        break;
+      }
+      case 'get_weather': {
+        const wCity: string = params['city'] ?? this.plan.city;
+        try {
+          const bridge = (await import('../platform/PlatformBridge')).PlatformBridge.getInstance();
+          const weatherKey: string = 'fc2c6f05fd1c51af417ddb1aa4f0aec3';
+          const geoUrl: string = `https://restapi.amap.com/v3/config/district?key=${weatherKey}&keywords=${encodeURI(wCity)}&subdistrict=0`;
+          const geoResp = await bridge.network.request(geoUrl, { method: 'GET', connectTimeout: 5000, readTimeout: 8000 });
+          let adcode: string = '';
+          if (geoResp.responseCode === 200) {
+            const geoData: Record<string, Object> = JSON.parse(geoResp.result) as Record<string, Object>;
+            const districts = (geoData['districts'] as Object[]) || [];
+            if (districts.length > 0) {
+              adcode = ((districts[0] as Record<string, Object>)['adcode'] as string) || '';
+            }
+          }
+          if (adcode) {
+            const wUrl: string = `https://restapi.amap.com/v3/weather/weatherInfo?key=${weatherKey}&city=${adcode}&extensions=all`;
+            const wResp = await bridge.network.request(wUrl, { method: 'GET', connectTimeout: 5000, readTimeout: 8000 });
+            if (wResp.responseCode === 200) {
+              const wData: Record<string, Object> = JSON.parse(wResp.result) as Record<string, Object>;
+              const forecasts = (wData['forecasts'] as Object[]) || [];
+              if (forecasts.length > 0) {
+                const fc = forecasts[0] as Record<string, Object>;
+                const casts = (fc['casts'] as Object[]) || [];
+                const todayCast = casts.length > 0 ? casts[0] as Record<string, Object> : null;
+                if (todayCast) {
+                  const dayWeather: string = (todayCast['dayweather'] as string) || '';
+                  const nightWeather: string = (todayCast['nightweather'] as string) || '';
+                  const dayTemp: string = (todayCast['daytemp'] as string) || '';
+                  const nightTemp: string = (todayCast['nighttemp'] as string) || '';
+                  const dayWind: string = (todayCast['daywind'] as string) || '';
+                  const dayPower: string = (todayCast['daypower'] as string) || '';
+                  resultText = `${wCity}今日天气：白天${dayWeather} ${dayTemp}°C 夜间${nightWeather} ${nightTemp}°C ${dayWind}风${dayPower}级`;
+                  // 未来两天预报
+                  if (casts.length > 1) {
+                    const tmr = casts[1] as Record<string, Object>;
+                    resultText += `\n明日：${(tmr['dayweather'] as string) || ''} ${(tmr['daytemp'] as string) || ''}°C`;
+                  }
+                  if (casts.length > 2) {
+                    const aft = casts[2] as Record<string, Object>;
+                    resultText += `\n后日：${(aft['dayweather'] as string) || ''} ${(aft['daytemp'] as string) || ''}°C`;
+                  }
+                  if (dayWeather.includes('雨') || nightWeather.includes('雨')) {
+                    resultText += '\n🌧️ 有雨！建议优先安排室内景点，户外活动备伞。';
+                  }
+                } else {
+                  resultText = `已获取${wCity}天气数据，但暂无今日预报。`;
+                }
+              } else {
+                // 无预报数据,退回base接口
+                const bUrl: string = `https://restapi.amap.com/v3/weather/weatherInfo?key=${weatherKey}&city=${adcode}&extensions=base`;
+                const bResp = await bridge.network.request(bUrl, { method: 'GET', connectTimeout: 5000, readTimeout: 8000 });
+                if (bResp.responseCode === 200) {
+                  const bData: Record<string, Object> = JSON.parse(bResp.result) as Record<string, Object>;
+                  const lives = (bData['lives'] as Object[]) || [];
+                  if (lives.length > 0) {
+                    const live = lives[0] as Record<string, Object>;
+                    resultText = `${wCity}: ${live['weather'] || ''} ${live['temperature'] || ''}°C ${live['winddirection'] || ''}风${live['windpower'] || ''}级 湿度${live['humidity'] || ''}%`;
+                    if ((live['weather'] as string || '').includes('雨')) {
+                      resultText += '\n🌧️ 有雨！建议优先安排室内景点。';
+                    }
+                  } else {
+                    resultText = `未获取到${wCity}天气数据。`;
+                  }
+                } else {
+                  resultText = `天气查询失败(${wResp.responseCode})。`;
+                }
+              }
+            } else {
+              resultText = `天气查询失败。`;
+            }
+          } else {
+            resultText = `未找到城市"${wCity}"。`;
+          }
+        } catch (e) {
+          Logger.error(TAG, 'Weather query failed: %{public}s', JSON.stringify(e));
+          resultText = `天气查询异常，请稍后重试。`;
+        }
         break;
       }
       default:
