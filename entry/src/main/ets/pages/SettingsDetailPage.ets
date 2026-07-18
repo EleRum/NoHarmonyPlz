@@ -142,7 +142,11 @@ export struct SettingsDetailPage {
 
   async saveRecSetting(enabled: boolean): Promise<void> {
     this.recEnabled = enabled;
-    await this.dao.upsertUserProfile('recommendation_enabled', enabled ? 'true' : 'false', 1);
+    try {
+      await this.dao.upsertUserProfile('recommendation_enabled', enabled ? 'true' : 'false', 1);
+    } catch (e) {
+      Logger.error(TAG, 'Failed to save rec setting: %{public}s', JSON.stringify(e));
+    }
   }
 
   build() {
@@ -276,7 +280,10 @@ export struct SettingsDetailPage {
         Toggle({ type: ToggleType.Switch, isOn: this.showMapMarkers })
           .onChange((isOn: boolean) => {
             this.showMapMarkers = isOn;
-            this.dao.upsertUserProfile('map_markers_enabled', isOn ? 'true' : 'false', 1);
+            this.dao.upsertUserProfile('map_markers_enabled', isOn ? 'true' : 'false', 1)
+              .catch((err: Error) => {
+                Logger.error(TAG, 'Failed to save map marker setting: %{public}s', err.message);
+              });
             MapMarkerSignal.fire();
           })
       }.width('100%').padding(16).backgroundColor(getTheme(this.themeMode).surface).borderRadius(10)

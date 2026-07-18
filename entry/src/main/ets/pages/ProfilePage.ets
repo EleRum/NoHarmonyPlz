@@ -111,7 +111,10 @@ export struct ProfileContent {
           Toggle({ type: ToggleType.Switch, isOn: isDarkTheme() })
             .onChange((isOn: boolean) => {
               toggleTheme();
-              this.dao.upsertUserProfile('theme_is_dark', isOn ? 'dark' : 'light', 1);
+              this.dao.upsertUserProfile('theme_is_dark', isOn ? 'dark' : 'light', 1)
+                .catch((err: Error) => {
+                  Logger.error(TAG, 'Failed to save theme: %{public}s', err.message);
+                });
             }).height(28)
         }
         .width('100%')
