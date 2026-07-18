@@ -114,6 +114,8 @@ export struct MapPage {
   private dayPolylines: string[] = [];
   private dayPoiMarkers: string[][] = [];
   private daySegMarkers: string[][] = [];
+  private dayDirStartMarkers: string[] = [];  // 每天起点绿标
+  private dayDirEndMarkers: string[] = [];    // 每天终点红标
   private segMarkers: string[] = [];
   @State showRecMarkers: boolean = false;
   @State showRecPicker: boolean = false;
@@ -186,6 +188,15 @@ export struct MapPage {
     for (let i = 0; i < this.daySegMarkers.length; i++) {
       for (const m of this.daySegMarkers[i]) {
         try { if (this.mapService) this.mapService.setMarkerVisible(m, i === this.selectedDayIndex); } catch (e) {}
+      }
+    }
+    // 方向标记
+    for (let i = 0; i < this.dayDirStartMarkers.length; i++) {
+      if (this.dayDirStartMarkers[i].length > 0) {
+        try { if (this.mapService) this.mapService.setMarkerVisible(this.dayDirStartMarkers[i], i === this.selectedDayIndex); } catch (e) {}
+      }
+      if (this.dayDirEndMarkers[i].length > 0) {
+        try { if (this.mapService) this.mapService.setMarkerVisible(this.dayDirEndMarkers[i], i === this.selectedDayIndex); } catch (e) {}
       }
     }
   }
@@ -861,26 +872,31 @@ export struct MapPage {
         this.daySegMarkers.push(segMarkersForDay);
       }
 
-      // 路线方向标记：最后画，保证盖在 POI 标记上面
+      // 路线方向标记：每段路线画起点(绿)和终点(红)，只显示选中天
       for (let ri = 0; ri < this.dayRoutes.length; ri++) {
         const fps: Footprint[] = this.dayRoutes[ri].footprints;
-        if (fps.length < 2) continue;
-        try {
-          const startFp = fps[0];
-          const endFp = fps[fps.length - 1];
-          // 起点用小绿方块
-          ms.addMarker({
-            position: { latitude: startFp.latitude, longitude: startFp.longitude },
-            iconStyle: { color: '#10B981', size: 14 },
-            zIndex: 15
-          });
-          // 终点用小红方块
-          ms.addMarker({
-            position: { latitude: endFp.latitude, longitude: endFp.longitude },
-            iconStyle: { color: '#EF4444', size: 14 },
-            zIndex: 15
-          });
-        } catch (e) { /* ignore */ }
+        let sId = '';
+        let eId = '';
+        if (fps.length >= 2) {
+          try {
+            sId = ms.addMarker({
+              position: { latitude: fps[0].latitude, longitude: fps[0].longitude },
+              iconStyle: { color: '#10B981', size: 14 },
+              zIndex: 15
+            });
+            eId = ms.addMarker({
+              position: { latitude: fps[fps.length - 1].latitude, longitude: fps[fps.length - 1].longitude },
+              iconStyle: { color: '#EF4444', size: 14 },
+              zIndex: 15
+            });
+          } catch (e) { /* ignore */ }
+        }
+        this.dayDirStartMarkers.push(sId);
+        this.dayDirEndMarkers.push(eId);
+        if (ri !== this.selectedDayIndex) {
+          if (sId.length > 0) try { ms.setMarkerVisible(sId, false); } catch (e) {}
+          if (eId.length > 0) try { ms.setMarkerVisible(eId, false); } catch (e) {}
+        }
       }
 
       if (allPts.length > 0) {
@@ -925,6 +941,15 @@ export struct MapPage {
       }
     }
     this.daySegMarkers = [];
+    // 清除方向标记
+    for (const id of this.dayDirStartMarkers) {
+      if (id.length > 0 && ms) try { ms.removeMarker(id); } catch (e) {}
+    }
+    for (const id of this.dayDirEndMarkers) {
+      if (id.length > 0 && ms) try { ms.removeMarker(id); } catch (e) {}
+    }
+    this.dayDirStartMarkers = [];
+    this.dayDirEndMarkers = [];
   }
 
   /** 清除所有 segment 标记，从地图上移除并清空列表 */
