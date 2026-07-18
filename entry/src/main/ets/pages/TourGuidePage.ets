@@ -3,6 +3,7 @@
  * AI 一步步收集信息、搜酒店、规划每日行程、生成路线图
  */
 import { webview } from '@kit.ArkWeb';
+import router from '@ohos.router';
 import { getTheme, isDarkTheme } from '../common/Theme';
 
 import { MapWebView } from '../services/map/MapWebView';
@@ -780,6 +781,22 @@ export struct TourGuideContent {
           }
         })
 
+
+        // 推荐浮钮 — 查看当前城市周边推荐
+        Row() {
+          Blank()
+          Column() {
+            Text('💡').fontSize(18)
+            Text('推荐').fontSize(9).fontColor('#FFFFFF').margin({ top: 1 })
+          }
+          .width(42).height(42).borderRadius(21)
+          .backgroundColor('#CC3B82F6').justifyContent(FlexAlign.Center)
+          .shadow({ radius: 4, color: '#403B82F6', offsetY: 2 })
+          .onClick(() => {
+            router.pushUrl({ url: 'pages/RecommendPage' });
+          })
+        }
+        .width('100%').padding({ right: 12 }).margin({ top: 90 })
 
         if (!this.isMapReady) {
           Column() {
