@@ -801,29 +801,6 @@ export struct MapPage {
         if (polylineId.length > 0 && ri !== this.selectedDayIndex) {
           try { ms.setPolylineVisible(polylineId, false); } catch (e) {}
         }
-        // 路线方向标记：起点绿色、终点红色
-        try {
-          if (fps.length >= 2) {
-            const startFp = fps[0];
-            const endFp = fps[fps.length - 1];
-            const startId = ms.addMarker({
-              position: { latitude: startFp.latitude, longitude: startFp.longitude },
-              iconStyle: { color: '#10B981', size: 16 },
-              title: '起点', zIndex: 12
-            });
-            const endId = ms.addMarker({
-              position: { latitude: endFp.latitude, longitude: endFp.longitude },
-              iconStyle: { color: '#EF4444', size: 16 },
-              title: '终点', zIndex: 12
-            });
-            if (ri !== this.selectedDayIndex) {
-              try { ms.setMarkerVisible(startId, false); } catch (e) {}
-              try { ms.setMarkerVisible(endId, false); } catch (e) {}
-            }
-          }
-        } catch (e) {
-          Logger.warn(TAG, 'Direction markers failed: %{public}s', JSON.stringify(e));
-        }
       }
 
       for (let ri = 0; ri < this.dayRoutes.length; ri++) {
@@ -882,6 +859,28 @@ export struct MapPage {
           }
         }
         this.daySegMarkers.push(segMarkersForDay);
+      }
+
+      // 路线方向标记：最后画，保证盖在 POI 标记上面
+      for (let ri = 0; ri < this.dayRoutes.length; ri++) {
+        const fps: Footprint[] = this.dayRoutes[ri].footprints;
+        if (fps.length < 2) continue;
+        try {
+          const startFp = fps[0];
+          const endFp = fps[fps.length - 1];
+          // 起点用小绿方块
+          ms.addMarker({
+            position: { latitude: startFp.latitude, longitude: startFp.longitude },
+            iconStyle: { color: '#10B981', size: 14 },
+            zIndex: 15
+          });
+          // 终点用小红方块
+          ms.addMarker({
+            position: { latitude: endFp.latitude, longitude: endFp.longitude },
+            iconStyle: { color: '#EF4444', size: 14 },
+            zIndex: 15
+          });
+        } catch (e) { /* ignore */ }
       }
 
       if (allPts.length > 0) {
