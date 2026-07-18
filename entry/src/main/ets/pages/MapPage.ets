@@ -117,6 +117,7 @@ export struct MapPage {
   private segMarkers: string[] = [];
   @State showRecMarkers: boolean = false;
   @State showRecPicker: boolean = false;
+  @State showLegend: boolean = false;
   @State showChat: boolean = false;
   @State chatInput: string = '';
   @State chatMessages: ChatBubble[] = [
@@ -800,6 +801,25 @@ export struct MapPage {
         if (polylineId.length > 0 && ri !== this.selectedDayIndex) {
           try { ms.setPolylineVisible(polylineId, false); } catch (e) {}
         }
+        // 路线方向标记：起点绿色、终点红色
+        if (fps.length >= 2) {
+          const startFp = fps[0];
+          const endFp = fps[fps.length - 1];
+          const startId = ms.addMarker({
+            position: { latitude: startFp.latitude, longitude: startFp.longitude },
+            iconStyle: { color: '#10B981', size: 20 },
+            title: '起点', clickable: false, zIndex: 12
+          });
+          const endId = ms.addMarker({
+            position: { latitude: endFp.latitude, longitude: endFp.longitude },
+            iconStyle: { color: '#EF4444', size: 20 },
+            title: '终点', clickable: false, zIndex: 12
+          });
+          if (ri !== this.selectedDayIndex) {
+            try { ms.setMarkerVisible(startId, false); } catch (e) {}
+            try { ms.setMarkerVisible(endId, false); } catch (e) {}
+          }
+        }
       }
 
       for (let ri = 0; ri < this.dayRoutes.length; ri++) {
@@ -1119,7 +1139,8 @@ export struct MapPage {
     if (msg.length === 0) return;
     this.chatMessages.push({ role: 'user', content: msg });
     this.chatInput = '';
-    this.chatScroller.scrollEdge(Edge.Bottom);
+    // 延迟滚动等 UI 渲染完
+    setTimeout(() => { this.chatScroller.scrollEdge(Edge.Bottom); }, 50);
 
     this.isAiThinking = true;
     this.syncAgentContext();
@@ -1127,7 +1148,7 @@ export struct MapPage {
     this.isAiThinking = false;
 
     this.chatMessages.push({ role: 'ai', content: reply.text });
-    this.chatScroller.scrollEdge(Edge.Bottom);
+    setTimeout(() => { this.chatScroller.scrollEdge(Edge.Bottom); }, 50);
 
     if (reply.action === 'refresh_timeline') {
       this.triggerClassify();
@@ -1481,6 +1502,19 @@ export struct MapPage {
 
   /** 构建出行方式选择按钮 */
   @Builder
+  LegendRow(color: string, title: string, desc: string) {
+    Row() {
+      Row() {}.width(12).height(12).borderRadius(6).backgroundColor(color).margin({ right: 8 })
+      Column() {
+        Text(title).fontSize(13).fontColor(getTheme(this.themeMode).textPrimary)
+        Text(desc).fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 1 })
+      }
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%').padding({ top: 6, bottom: 6 })
+  }
+
+  @Builder
   BuildNavModeBtn(emoji: string, label: string, mode: DirectionMode) {
     Column() {
       Text(emoji).fontSize(18)
@@ -1708,6 +1742,47 @@ export struct MapPage {
             })
           }
           .width('100%').padding({ right: 12 }).margin({ top: 288 })
+
+          // 图例浮钮
+          Row() {
+            Blank()
+            Column() {
+              Text('?').fontSize(18).fontWeight(FontWeight.Bold)
+            }
+            .width(36).height(36).borderRadius(18)
+            .backgroundColor('#CC666666').justifyContent(FlexAlign.Center)
+            .shadow({ radius: 4, color: '#40666666', offsetY: 2 })
+            .onClick(() => { this.showLegend = !this.showLegend; })
+          }
+          .width('100%').padding({ right: 12 }).margin({ top: 344 })
+
+          // 地图图例面板
+          if (this.showLegend) {
+            Column() {
+              Column() {}.width('100%').layoutWeight(1)
+                .onClick(() => { this.showLegend = false; })
+              Column() {
+                Row() {
+                  Text('🗺️ 图例').fontSize(14).fontWeight(FontWeight.Bold)
+                    .fontColor(getTheme(this.themeMode).textPrimary)
+                  Blank()
+                  Text('✕').fontSize(16).fontColor(getTheme(this.themeMode).textSecondary)
+                    .onClick(() => { this.showLegend = false; })
+                }.width('100%').margin({ bottom: 10 })
+                this.LegendRow('#3B82F6', '当前位置 (蓝点)', '实时 GPS 定位')
+                this.LegendRow('#FFB800', '推荐门店 (黄点)', 'AI 推荐的热门地点')
+                this.LegendRow('#10B981', '路线起点 (绿点)', '当天出行开始位置')
+                this.LegendRow('#EF4444', '路线终点 (红点)', '当天出行结束位置')
+                Text('彩色线路 = 不同天的出行轨迹')
+                  .fontSize(12).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 4 })
+              }
+              .padding(16).backgroundColor(getTheme(this.themeMode).surface)
+              .borderRadius({ topLeft: 14, topRight: 14 })
+              .shadow({ radius: 8, color: '#20000000', offsetY: -2 })
+            }
+            .width('100%').height('100%')
+            .position({ x: 0, y: 0 }).zIndex(99)
+          }
 
           // 推荐选择面板
           if (this.showRecPicker) {
