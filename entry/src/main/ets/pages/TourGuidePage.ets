@@ -180,6 +180,22 @@ export struct TourGuideContent {
       lng: this.mapCenter.longitude, lat: this.mapCenter.latitude,
       zoom: this.mapZoom, apiKey: 'bb0c1640992e6c7f2b1467498d8ae848'
     } as MapInitConfig);
+
+    // 兜底：若 JS 侧 auto-init 的 mapReady 早于 javaScriptProxy 注册，
+    // setEventCallbacks 的回调收不到，这里补发一次
+    bridge.onMapReady((_err: Error | null): void => {
+      if (!this.isMapReady) {
+        this.isMapReady = true;
+        Logger.info(TAG, 'Tour map ready via fallback');
+        if (isDarkTheme() && this.mapService) {
+          this.mapService.setMapStyle('amap://styles/dark');
+          this.mapService.setDarkMode(true);
+        }
+        if (this.plan && this.plan.dailyPlans.length > 0) {
+          this.drawPlanOnMap(this.plan);
+        }
+      }
+    });
   }
 
   /** 发送消息 */
