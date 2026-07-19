@@ -815,8 +815,9 @@ export struct TourGuideContent {
   }
 
   build() {
-    Column() {
-      Stack() {
+    Stack() {
+      Column() {
+        Stack() {
         // 全屏地图
         MapWebView({
           onControllerAttached: (controller: webview.WebviewController): void => {
@@ -1120,8 +1121,8 @@ export struct TourGuideContent {
       .border({ width: { top: 0.5 }, color: '#E8E8E8' })
     }
     .width('100%').height('100%')
-
-    // 历史对话面板
+    }
+    // 历史对话面板（处于外层 Stack 内，覆盖在内容上方）
     if (this.showHistory) {
       Column() {
         Column() {}.width('100%').layoutWeight(1)
@@ -1196,5 +1197,10 @@ export struct TourGuideContent {
     } catch (e) {
       Logger.error(TAG, 'Failed to load history: %{public}s', JSON.stringify(e));
     }
+  }
+
+  // ── build 的 Stack 闭合 + 尺寸 ──
+    }
+    .width('100%').height('100%')
   }
 }
