@@ -1168,6 +1168,8 @@ export struct TourGuideContent {
       .backgroundColor('#80000000')
     }
   }
+  .width('100%').height('100%')
+  }
 
   /** 从历史加载指定对话 */
   async loadFromHistory(id: string): Promise<void> {
@@ -1197,10 +1199,5 @@ export struct TourGuideContent {
     } catch (e) {
       Logger.error(TAG, 'Failed to load history: %{public}s', JSON.stringify(e));
     }
-  }
-
-  // ── build 的 Stack 闭合 + 尺寸 ──
-    }
-    .width('100%').height('100%')
   }
 }
