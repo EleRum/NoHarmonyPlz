@@ -1121,7 +1121,6 @@ export struct TourGuideContent {
       .border({ width: { top: 0.5 }, color: '#E8E8E8' })
     }
     .width('100%').height('100%')
-    }
     // 历史对话面板（处于外层 Stack 内，覆盖在内容上方）
     if (this.showHistory) {
       Column() {
@@ -1169,6 +1168,7 @@ export struct TourGuideContent {
     }
   }
   .width('100%').height('100%')
+  }
   }
 
   /** 从历史加载指定对话 */
