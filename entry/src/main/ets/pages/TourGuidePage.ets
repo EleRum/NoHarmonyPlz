@@ -28,48 +28,7 @@ interface ChatBubble {
   content: string;
 }
 
-interface TourHistoryItem {
-  id: string;
-  title: string;
-  date: string;
-}
-
 const ROUTE_COLORS: string[] = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4'];
-
-/** 保存当前对话到历史 */
-async function saveToHistory(plan: TourPlan | null, messages: ChatBubble[]): Promise<void> {
-  if (messages.length <= 1) return; // 只有开场白的不存
-  try {
-    const dao = Dao.getInstance();
-    const raw = await dao.queryUserProfile('tour_history');
-    let list: TourHistoryItem[] = [];
-    if (raw && raw.preferenceValue) {
-      try { list = JSON.parse(raw.preferenceValue) as TourHistoryItem[]; } catch (_e) { list = []; }
-    }
-    // 取前20字作为标题
-    const firstUser = messages.find(m => m.role === 'user');
-    const title: string = firstUser ? firstUser.content.substring(0, 20) : '未命名对话';
-    const id: string = Date.now().toString();
-    list.unshift({ id, title, date: new Date().toLocaleDateString() });
-    // 只保留最近20条
-    if (list.length > 20) list = list.slice(0, 20);
-    await dao.upsertUserProfile('tour_history', JSON.stringify(list), 1);
-    // 同时把这份对话存到单独key以便恢复
-    await dao.upsertUserProfile('tour_history_' + id, JSON.stringify({ plan, messages }), 1);
-  } catch (_e) { /* ignore */ }
-}
-
-/** 加载历史列表 */
-async function loadHistoryList(): Promise<TourHistoryItem[]> {
-  try {
-    const dao = Dao.getInstance();
-    const raw = await dao.queryUserProfile('tour_history');
-    if (raw && raw.preferenceValue) {
-      return JSON.parse(raw.preferenceValue) as TourHistoryItem[];
-    }
-  } catch (_e) { /* ignore */ }
-  return [];
-}
 
 // 模块级持久化：翻页/退出不丢失
 class PlanState {
@@ -99,8 +58,6 @@ export struct TourGuideContent {
   @State quickReplies: string[] = [];
   @State transportOptions: IntercityTransportOption[] = [];
   @State chatScrollHeight: number = 160;
-  @State showHistory: boolean = false;
-  @State historyList: TourHistoryItem[] = [];
   private chatDragStartH: number = 0;
   private chatScroller: Scroller = new Scroller();
   private quickReplyPoiData: PoiResult[] = [];
@@ -815,9 +772,8 @@ export struct TourGuideContent {
   }
 
   build() {
-    Stack() {
-      Column() {
-        Stack() {
+    Column() {
+      Stack() {
         // 全屏地图
         MapWebView({
           onControllerAttached: (controller: webview.WebviewController): void => {
@@ -959,17 +915,9 @@ export struct TourGuideContent {
         Row() {
           Text('🤖 小途 · 旅游规划师').fontSize(13).fontWeight(FontWeight.Bold).fontColor(getTheme(this.themeMode).textPrimary)
           Blank()
-          Button('历史').fontSize(11).fontColor('#3B82F6').height(24).padding({ left: 8, right: 8 })
-            .backgroundColor('#EBF3FF').borderRadius(10)
-            .onClick(async () => {
-              this.historyList = await loadHistoryList();
-              this.showHistory = true;
-            })
-          Button('新对话').fontSize(11).fontColor('#FFFFFF').height(24).padding({ left: 8, right: 8 })
-            .backgroundColor('#10B981').borderRadius(10).margin({ left: 6 })
-            .onClick(async () => {
-              // 保存当前对话到历史
-              await saveToHistory(this.plan, this.chatMessages);
+          Button('清空').fontSize(11).fontColor('#FFFFFF').height(24).padding({ left: 8, right: 8 })
+            .backgroundColor('#FF5252').borderRadius(10)
+            .onClick(() => {
               this.agent.reset();
               this.plan = null;
               this.isAiThinking = false;
@@ -1121,83 +1069,5 @@ export struct TourGuideContent {
       .border({ width: { top: 0.5 }, color: '#E8E8E8' })
     }
     .width('100%').height('100%')
-    // 历史对话面板（处于外层 Stack 内，覆盖在内容上方）
-    if (this.showHistory) {
-      Column() {
-        Column() {}.width('100%').layoutWeight(1)
-          .onClick(() => { this.showHistory = false; })
-        Column() {
-          Row() {
-            Text('📋 历史对话').fontSize(15).fontWeight(FontWeight.Bold)
-              .fontColor(getTheme(this.themeMode).textPrimary)
-            Blank()
-            Text('✕').fontSize(16).fontColor(getTheme(this.themeMode).textSecondary)
-              .onClick(() => { this.showHistory = false; })
-          }.width('100%').margin({ bottom: 10 })
-          if (this.historyList.length === 0) {
-            Text('暂无历史对话').fontSize(13).fontColor(getTheme(this.themeMode).textSecondary)
-          } else {
-            Scroll() {
-              Column() {
-                ForEach(this.historyList, (item: TourHistoryItem) => {
-                  Row() {
-                    Column() {
-                      Text(item.title).fontSize(14).fontColor(getTheme(this.themeMode).textPrimary).maxLines(1)
-                      Text(item.date).fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 2 })
-                    }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-                    Text('›').fontSize(18).fontColor(getTheme(this.themeMode).textTertiary)
-                  }
-                  .width('100%').padding({ top: 12, bottom: 12 })
-                  .border({ width: { bottom: 0.5 }, color: getTheme(this.themeMode).border })
-                  .onClick(async () => {
-                    await this.loadFromHistory(item.id);
-                    this.showHistory = false;
-                  })
-                })
-              }
-            }.height(300)
-          }
-        }
-        .padding(16).backgroundColor(getTheme(this.themeMode).surface)
-        .borderRadius({ topLeft: 14, topRight: 14 })
-        .shadow({ radius: 8, color: '#20000000', offsetY: -2 })
-      }
-      .width('100%').height('100%')
-      .position({ x: 0, y: 0 }).zIndex(200)
-      .backgroundColor('#80000000')
-    }
-  }
-  .width('100%').height('100%')
-  }
-  }
-
-  /** 从历史加载指定对话 */
-  async loadFromHistory(id: string): Promise<void> {
-    try {
-      const dao = Dao.getInstance();
-      const raw = await dao.queryUserProfile('tour_history_' + id);
-      if (raw && raw.preferenceValue) {
-        const saved = JSON.parse(raw.preferenceValue) as Record<string, Object>;
-        const savedPlan = saved['plan'] as TourPlan | null;
-        const savedChat = saved['messages'] as ChatBubble[];
-        if (savedPlan) {
-          this.plan = savedPlan;
-          this.agent.setPlan(JSON.parse(JSON.stringify(savedPlan)) as TourPlan);
-          g_planState.plan = this.plan;
-          await dao.upsertUserProfile('tour_plan', JSON.stringify(this.plan), 1);
-        }
-        if (savedChat && savedChat.length > 0) {
-          this.chatMessages = savedChat;
-          g_planState.messages = savedChat;
-          await dao.upsertUserProfile('tour_chat', JSON.stringify(savedChat), 1);
-        }
-        this.isAiThinking = false;
-        if (this.isMapReady && this.plan) {
-          this.drawPlanOnMap(this.plan);
-        }
-      }
-    } catch (e) {
-      Logger.error(TAG, 'Failed to load history: %{public}s', JSON.stringify(e));
-    }
   }
 }
