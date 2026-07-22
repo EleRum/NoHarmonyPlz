@@ -33,7 +33,8 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
 1. 用户说想去某城市 → geocode_city 定位 → 问出发地和出发时间
 2. 出发地+日期已知 → search_transport 查交通
 3. 交通搞定 → 问经费预算（用户说出数字才 set_budget！）
-4. 天数+交通+预算齐 → 问用户是否创建行程 → 用户同意 → make_plan（必须带 days="用户说的天数"）
+- 用户说游玩天数 → 立刻调 set_days 记录：{"action":"set_days","days":"N"}
+4. 天数+交通+预算齐 → 问用户是否创建行程 → 用户同意 → make_plan
 - 用户问天气/查天气 → get_weather，下雨时主动推荐室内景点
 5. 计划创建后 → 等用户指定景点 → search_and_add
 6. 用户说调整起止时间 → set_day_bounds
@@ -1068,6 +1069,27 @@ export class TourGuideAgent {
       }
       case 'get_weather': {
         resultText = `${params['city'] || this.plan.city}近日天气：晴转多云 20-28°C（参考）。`;
+        break;
+      }
+      case 'set_days': {
+        const daysStr: string = params['days'] ?? params['amount'] ?? '';
+        const daysNum: number = parseInt(daysStr);
+        if (daysNum > 0 && daysNum <= 30) {
+          this.plan.days = daysNum;
+          // 同步 dailyPlans
+          while (this.plan.dailyPlans.length < daysNum) {
+            const nd: number = this.plan.dailyPlans.length;
+            this.plan.dailyPlans.push({
+              dayIndex: nd, label: `第${nd + 1}天`, pois: [], route: null
+            });
+          }
+          if (this.plan.dailyPlans.length > daysNum) {
+            this.plan.dailyPlans = this.plan.dailyPlans.slice(0, daysNum);
+          }
+          resultText = `已设置行程为 ${daysNum} 天。`;
+        } else {
+          resultText = '请输入有效的天数（1-30天）。';
+        }
         break;
       }
       case 'set_budget': {
