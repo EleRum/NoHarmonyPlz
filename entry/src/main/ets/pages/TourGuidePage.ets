@@ -38,9 +38,17 @@ interface TourHistoryItem {
 const ROUTE_COLORS: string[] = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4'];
 const HISTORY_KEY: string = 'tour_history';
 const MAX_HISTORY: number = 20;
+let lastSaveFingerprint: string = '';
+let lastSaveTime: number = 0;
 
 async function saveToHistory(plan: TourPlan | null, messages: ChatBubble[]): Promise<void> {
   if (messages.length <= 1) return;
+  // 防抖：2秒内同样内容不重复存
+  const fp: string = messages.length.toString() + (messages[1]?.content?.substring(0, 20) || '');
+  const now: number = Date.now();
+  if (fp === lastSaveFingerprint && now - lastSaveTime < 2000) return;
+  lastSaveFingerprint = fp;
+  lastSaveTime = now;
   try {
     const dao = Dao.getInstance();
     const raw = await dao.queryUserProfile(HISTORY_KEY);
