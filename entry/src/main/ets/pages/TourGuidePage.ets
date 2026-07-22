@@ -32,6 +32,7 @@ interface TourHistoryItem {
   id: string;
   title: string;
   date: string;
+  fingerprint?: string;
 }
 
 const ROUTE_COLORS: string[] = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4'];
@@ -49,12 +50,16 @@ async function saveToHistory(plan: TourPlan | null, messages: ChatBubble[]): Pro
     }
     const firstUser = messages.find(m => m.role === 'user');
     const title = firstUser ? firstUser.content.substring(0, 20) : '未命名对话';
-    // 去重：同样标题的只保留最新那条
+    // 用消息内容指纹去重，不是用标题
+    const msgFingerprint = JSON.stringify(messages.slice(0, 3));
     for (let i = list.length - 1; i >= 0; i--) {
-      if (list[i].title === title) { list.splice(i, 1); }
+      if (list[i].fingerprint === msgFingerprint) {
+        // 完全重复，不存
+        return;
+      }
     }
     const id = Date.now().toString();
-    list.unshift({ id, title, date: new Date().toLocaleDateString() });
+    list.unshift({ id, title, date: new Date().toLocaleDateString(), fingerprint: msgFingerprint });
     if (list.length > MAX_HISTORY) list = list.slice(0, MAX_HISTORY);
     await dao.upsertUserProfile(HISTORY_KEY, JSON.stringify(list), 1);
     await dao.upsertUserProfile('tour_history_' + id, JSON.stringify({ plan, messages }), 1);
