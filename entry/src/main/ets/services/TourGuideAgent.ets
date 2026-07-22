@@ -549,6 +549,19 @@ export class TourGuideAgent {
     return undefined;
   }
 
+  /** 检测天数意图：用户说"N天" → set_days，不依赖 AI */
+  private detectDaysIntent(input: string): ToolCall | undefined {
+    // 已经设置过天数且用户没有说新的数字 → 跳过
+    const m = input.match(/(\d+)\s*[天日]/);
+    if (m) {
+      const days = parseInt(m[1]);
+      if (days >= 1 && days <= 30) {
+        return { action: 'set_days', days: m[1] };
+      }
+    }
+    return undefined;
+  }
+
   /** 检测跨城交通搜索意图 — 绕过 AI，直接返回工具调用 */
   private detectTransportIntent(input: string): ToolCall | undefined {
     // 必须包含交通关键词
@@ -624,6 +637,13 @@ export class TourGuideAgent {
       Logger.info(TAG, 'Transport intent detected: %{public}s→%{public}s',
         transportIntent.from ?? '', transportIntent.to ?? '');
       collected.push(transportIntent);
+    }
+
+    // ── 2.5 收集天数意图：用户说 "N天" → 自动 set_days ──
+    const daysIntent: ToolCall | undefined = this.detectDaysIntent(input);
+    if (daysIntent) {
+      Logger.info(TAG, 'Days intent detected: %{public}s天', daysIntent.days ?? '');
+      collected.push(daysIntent);
     }
 
     // ── 3. 隐式交通：有目的地 + "从X出发/来/走" → 自动补交通搜索 ──
