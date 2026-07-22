@@ -1632,38 +1632,42 @@ export struct MapPage {
 
           Column() {
             Column() {
-              Row() {
-                ForEach(this.dayRoutes, (route: DayRoute, idx: number) => {
-                  Column() {
-                    Text(route.dayKey.slice(4, 6) + '/' + route.dayKey.slice(6, 8))
-                      .fontSize(12).fontColor(idx === this.selectedDayIndex ? '#FFFFFF' : '#AAA')
-                    Text(route.dayKey.slice(0, 4))
-                      .fontSize(9).fontColor(idx === this.selectedDayIndex ? '#FFFFFF' : '#CCC')
-                    Row() {}.width(24).height(2)
-                      .backgroundColor(idx === this.selectedDayIndex ? '#FFFFFF' : Color.Transparent)
-                      .borderRadius(1).margin({ top: 2 })
-                  }
-                  .padding({ top: 6, bottom: 6, left: 10, right: 10 })
-                  .backgroundColor(idx === this.selectedDayIndex ? '#3B82F6' : Color.Transparent)
-                  .borderRadius(16)
-                  .onClick(() => {
-                    this.selectedDayIndex = idx;
-                    const tKey: string = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-                    this.isViewingToday = (route.dayKey === tKey);
-                    this.toggleLiveElements(this.isViewingToday);
-                    this.syncDayVisibility();
-                    if (!this.isViewingToday && this.showRecMarkers) {
-                      this.showRecMarkers = false;
-                      for (const m of this.recMarkers) {
-                        try { if (this.mapService) this.mapService.setMarkerVisible(m, false); } catch (e) {}
-                      }
+              Scroll() {
+                Row() {
+                  ForEach(this.dayRoutes, (route: DayRoute, idx: number) => {
+                    Column() {
+                      Text(route.dayKey.slice(4, 6) + '/' + route.dayKey.slice(6, 8))
+                        .fontSize(12).fontColor(idx === this.selectedDayIndex ? '#FFFFFF' : '#AAA')
+                      Text(route.dayKey.slice(0, 4))
+                        .fontSize(9).fontColor(idx === this.selectedDayIndex ? '#FFFFFF' : '#CCC')
+                      Row() {}.width(24).height(2)
+                        .backgroundColor(idx === this.selectedDayIndex ? '#FFFFFF' : Color.Transparent)
+                        .borderRadius(1).margin({ top: 2 })
                     }
-                    this.clearSegmentMarkers();
-                    this.drawSegmentMarkers();
-                    this.focusOnDayRoute(idx);
+                    .padding({ top: 6, bottom: 6, left: 10, right: 10 })
+                    .backgroundColor(idx === this.selectedDayIndex ? '#3B82F6' : Color.Transparent)
+                    .borderRadius(16)
+                    .flexShrink(0)
+                    .onClick(() => {
+                      this.selectedDayIndex = idx;
+                      const tKey: string = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+                      this.isViewingToday = (route.dayKey === tKey);
+                      this.toggleLiveElements(this.isViewingToday);
+                      this.syncDayVisibility();
+                      if (!this.isViewingToday && this.showRecMarkers) {
+                        this.showRecMarkers = false;
+                        for (const m of this.recMarkers) {
+                          try { if (this.mapService) this.mapService.setMarkerVisible(m, false); } catch (e) {}
+                        }
+                      }
+                      this.clearSegmentMarkers();
+                      this.drawSegmentMarkers();
+                      this.focusOnDayRoute(idx);
+                    })
                   })
-                })
-              }.padding({ left: 8, right: 8 })
+                }
+              }
+              .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
               .width('100%').height(36)
 
               if (this.dayRoutes.length > 0) {
