@@ -801,6 +801,36 @@ export struct TourGuideContent {
   }
 
   @Builder
+  BuildBudgetBars() {
+    if (!this.plan || !this.plan.totalBudget) return;
+    const br = getBudgetBreakdown(this.plan);
+    const total = br.total > 0 ? br.total : 1;
+    const cats: Array<[string, number, string]> = [
+      ['🍽️ 餐饮', br.dining, '#FF6B35'],
+      ['🚗 交通', br.transport, '#3B82F6'],
+      ['🏨 酒店', br.hotel, '#8B5CF6'],
+      ['🎫 景点', br.attractions, '#10B981'],
+      ['🛍️ 购物', br.shopping, '#F59E0B'],
+    ].filter((c: [string, number, string]): boolean => c[1] > 0);
+    if (cats.length === 0) return;
+    Column() {
+      ForEach(cats, (cat: [string, number, string]) => {
+        Row() {
+          Text(cat[0]).fontSize(9).fontColor(getTheme(this.themeMode).textSecondary).width(52)
+          Row() {
+            Row() {}
+              .width(`${(cat[1] / total * 100).toFixed(0)}%`).height('100%')
+              .backgroundColor(cat[2]).borderRadius(1)
+          }
+          .layoutWeight(1).height(8).backgroundColor('#E8E8E8').borderRadius(1).margin({ left: 4, right: 4 })
+          Text(`¥${cat[1]}`).fontSize(9).fontColor(getTheme(this.themeMode).textPrimary).width(36)
+        }
+        .width('100%').margin({ bottom: 2 })
+      })
+    }.width('100%').margin({ top: 4, bottom: 2 })
+  }
+
+  @Builder
   TransportInfoRow(transport: InterCityTransport, label: string) {
     Row() {
       Text(getTransportEmoji(transport.type)).fontSize(14)
@@ -912,6 +942,9 @@ export struct TourGuideContent {
                   .borderRadius(1)
               }
               .width('100%').height(3).backgroundColor('#E8E8E8').borderRadius(1).margin({ bottom: 4 })
+
+              // 预算分类占比条
+              this.BuildBudgetBars()
             }
 
             // POI 横滑列表
