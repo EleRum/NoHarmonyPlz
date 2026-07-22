@@ -672,6 +672,8 @@ export class TourGuideAgent {
     }
 
     const userMsg: string = '用户: ' + input;
+    // 每次对话前强制重新加载密钥
+    await this.claude.loadApiKey(true);
     const reply: ClaudeReply = await this.claude.chatConversation(userMsg, this.getSystemPrompt());
     const text: string = reply.text || '抱歉，我暂时无法回复。';
     let toolCalls: ToolCall[] = this.parseToolCalls(text);
