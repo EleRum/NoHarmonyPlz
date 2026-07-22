@@ -85,7 +85,9 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
 - 如果不知道 poiIndex，先看当前计划里的 poi 列表推算（第0个=第一个景点，跳过标记POI）
 - geocode_city 只需一次，城市换了才重新geocode
 - 工具调用失败 → 换个参数重试，别停下来聊天
-- 每次回复末尾给 2-3 个快捷选项
+- 每次回复末尾给 2-3 个口语化快捷选项（用你的话，别用固定模板），放进 JSON：
+  单工具: {"action":"search_transport","from":"成都","to":"北京","quickReplies":["只看高铁","只看飞机","都看看"]}
+  纯文字: {"action":"chat","msg":"好的","quickReplies":["想去成都3天","推荐美食","改预算"]}
 
 ## 预算管理
 - 问用户预算 → 等用户说出数字 → 才调 set_budget
@@ -126,6 +128,7 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
 
 export interface ToolCall {
   action: string;
+  quickReplies?: string[];
   keywords?: string;
   city?: string;
   hotel?: string;
@@ -183,6 +186,7 @@ export interface ToolResult {
 export interface AgentResponse {
   text: string;
   toolCalls: ToolCall[];  // 多工具并行，空数组 = 无工具调用
+  quickReplies?: string[];
   plan?: TourPlan;
   mapCenter?: LatLng;
   markers?: MapMarker[];

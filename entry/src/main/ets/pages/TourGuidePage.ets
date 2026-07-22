@@ -252,6 +252,16 @@ export struct TourGuideContent {
     try {
       const resp: AgentResponse = await this.agent.process(input);
 
+      // 优先使用 AI 生成的快捷回复
+      let aiQuickReplies: string[] = resp.quickReplies || [];
+      for (const tc of resp.toolCalls) {
+        if (tc.quickReplies && tc.quickReplies.length > 0) {
+          aiQuickReplies = tc.quickReplies;
+          break;
+        }
+      }
+      if (aiQuickReplies.length > 0) this.quickReplies = aiQuickReplies;
+
       if (resp.toolCalls.length > 0) {
         const toolNames: string = resp.toolCalls.map(tc => tc.action).join('+');
         this.chatMessages.push({
@@ -366,6 +376,13 @@ export struct TourGuideContent {
           this.chatScroller.scrollEdge(Edge.Bottom);
         }
         this.saveState();
+
+        // AI 生成的快捷回复
+        let aiQr: string[] = aiResp.quickReplies || [];
+        for (const tc of [...aiResp.toolCalls, ...resp.toolCalls]) {
+          if (tc.quickReplies && tc.quickReplies.length > 0) { aiQr = tc.quickReplies; break; }
+        }
+        if (aiQr.length > 0) this.quickReplies = aiQr;
 
         // 链式调用：AI 返回的 + 系统自动串联的，合并成新批次
         const chainTools: ToolCall[] = [...aiResp.toolCalls, ...resp.toolCalls];
