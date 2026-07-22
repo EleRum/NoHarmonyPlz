@@ -139,7 +139,7 @@ export class MapJsBridge implements IMapService {
     const svgColor: string = color.replace('#', '%23');
     const iconUrl: string = `data:image/svg+xml,` +
       `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">` +
-      `<circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 2}" fill="${svgColor}" stroke="white" stroke-width="2"/>` +
+      `<circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 2}" fill="${svgColor}" />` +
       (text ? `<text x="${size / 2}" y="${size / 2 + size / 5}" text-anchor="middle" fill="white" font-size="${size * 0.6}">${text}</text>` : '') +
       `</svg>`;
 
@@ -178,7 +178,7 @@ export class MapJsBridge implements IMapService {
         'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="' + size +
         '" height="' + size + '"><circle cx="' + (size / 2) + '" cy="' + (size / 2) +
         '" r="' + (size / 2 - 2) + '" fill="' + svgColor +
-        '" stroke="white" stroke-width="2"/>' +
+        '" />' +
         (text ? '<text x="' + (size / 2) + '" y="' + (size / 2 + size / 5) +
          '" text-anchor="middle" fill="white" font-size="' + (size * 0.6) + '">' + text + '</text>' : '') +
         '</svg>';
