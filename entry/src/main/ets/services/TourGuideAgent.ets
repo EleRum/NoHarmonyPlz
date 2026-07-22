@@ -33,7 +33,7 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
 1. 用户说想去某城市 → geocode_city 定位 → 问出发地和出发时间
 2. 出发地+日期已知 → search_transport 查交通
 3. 交通搞定 → 问经费预算（用户说出数字才 set_budget！）
-4. 天数+交通+预算齐 → 问用户是否创建行程 → 用户同意 → make_plan
+4. 天数+交通+预算齐 → 问用户是否创建行程 → 用户同意 → make_plan（必须带 days="用户说的天数"）
 - 用户问天气/查天气 → get_weather，下雨时主动推荐室内景点
 5. 计划创建后 → 等用户指定景点 → search_and_add
 6. 用户说调整起止时间 → set_day_bounds
@@ -792,7 +792,7 @@ export class TourGuideAgent {
         // 一步完成：搜索 + 自动添加到计划
         // keywords 支持逗号分隔的多关键词 → 序列插入，顺序=用户说的顺序
         if (this.plan.dailyPlans.length === 0) {
-          this.plan.days = this.plan.days > 0 ? this.plan.days : 1;
+          this.plan.days = this.plan.days > 0 ? this.plan.days : 3;
           this.plan.dailyPlans = [{
             dayIndex: 0, label: '第1天',
             pois: this.plan.hotel ? [
