@@ -349,7 +349,10 @@ export struct TourGuideContent {
         if (resp.transportOptions && resp.transportOptions.length > 0) {
           this.transportOptions = resp.transportOptions;
         }
-        this.updateQuickReplies(resp.markers || [], primaryAction);
+        // 只在 AI 没给快捷回复时用硬编码兜底
+        if (this.quickReplies.length === 0) {
+          this.updateQuickReplies(resp.markers || [], primaryAction);
+        }
       }
 
       // 第二阶段：询问 AI 下一步
