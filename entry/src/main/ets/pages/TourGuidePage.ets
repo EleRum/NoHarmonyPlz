@@ -255,6 +255,7 @@ export struct TourGuideContent {
 
     this.stopRequested = false;
     this.isStopping = false;
+    this.chainDepth = 0;
     this.chatMessages.push({ role: 'user', content: input });
     this.chatInput = '';
     this.chatScroller.scrollEdge(Edge.Bottom);
@@ -313,9 +314,16 @@ export struct TourGuideContent {
 
   /** 批量执行工具调用并继续对话
    *  geocode 完成后立即移动地图（不等其余工具），其余工具完成后追加标记
-   *  第二阶段：询问 AI 下一步 → 链式调用下一批 */
+   *  第二阶段：询问 AI 下一步 → 链式调用下一批（只读工具最多2轮，防止AI跑飞） */
+  private chainDepth: number = 0;
   async autoExecuteTools(toolCalls: ToolCall[]): Promise<void> {
     if (toolCalls.length === 0) return;
+    this.chainDepth++;
+    if (this.chainDepth > 3) {
+      Logger.warn(TAG, 'Chain depth limit reached, breaking');
+      this.chainDepth = 0;
+      return;
+    }
     const primaryAction: string = toolCalls[0].action;
     try {
       // 第一阶段：批量执行工具（geocode 优先 + 其余并行）
@@ -400,9 +408,12 @@ export struct TourGuideContent {
         }
         if (aiQr.length > 0) this.quickReplies = aiQr;
 
-        // 链式调用：AI 返回的 + 系统自动串联的，合并成新批次
+        // 链式调用：只自动跑只读工具（搜索/天气），写操作必须等用户确认
         if (!this.stopRequested) {
-          const chainTools: ToolCall[] = [...aiResp.toolCalls, ...resp.toolCalls];
+          const READ_ONLY: string[] = ['geocode_city', 'search_poi', 'search_hotels',
+            'search_transport', 'get_weather'];
+          const chainTools: ToolCall[] = [...aiResp.toolCalls, ...resp.toolCalls]
+            .filter(tc => READ_ONLY.indexOf(tc.action) >= 0);
           if (chainTools.length > 0) {
             const chainNames: string = chainTools.map(tc => tc.action).join('+');
             this.chatMessages.push({ role: 'ai', content: '🔍 ' + chainNames + '...' });
