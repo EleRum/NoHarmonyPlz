@@ -73,6 +73,22 @@ async function loadHistoryList(): Promise<TourHistoryItem[]> {
   return [];
 }
 
+/** 清空所有历史对话 */
+async function clearAllHistory(): Promise<void> {
+  try {
+    const dao = Dao.getInstance();
+    const raw = await dao.queryUserProfile(HISTORY_KEY);
+    if (raw && raw.preferenceValue) {
+      let list: TourHistoryItem[] = [];
+      try { list = JSON.parse(raw.preferenceValue) as TourHistoryItem[]; } catch (_e) { list = []; }
+      for (const item of list) {
+        await dao.upsertUserProfile('tour_history_' + item.id, '', 0);
+      }
+    }
+    await dao.upsertUserProfile(HISTORY_KEY, '', 0);
+  } catch (_e) { /* ignore */ }
+}
+
 // 模块级持久化：翻页/退出不丢失
 class PlanState {
   plan: TourPlan | null = null;
@@ -1035,6 +1051,14 @@ export struct TourGuideContent {
                 Text('📋 历史对话').fontSize(15).fontWeight(FontWeight.Bold)
                   .fontColor(getTheme(this.themeMode).textPrimary)
                 Blank()
+                if (this.historyList.length > 0) {
+                  Text('清空').fontSize(11).fontColor('#FF5252')
+                    .onClick(async () => {
+                      await clearAllHistory();
+                      this.historyList = [];
+                    })
+                    .margin({ right: 12 })
+                }
                 Text('✕').fontSize(16).fontColor(getTheme(this.themeMode).textSecondary)
                   .onClick(() => { this.showHistory = false; })
               }.width('100%').margin({ bottom: 10 })
