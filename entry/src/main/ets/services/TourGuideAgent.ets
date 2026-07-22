@@ -551,15 +551,13 @@ export class TourGuideAgent {
 
   /** 检测天数意图：用户说"N天" → set_days，不依赖 AI */
   private detectDaysIntent(input: string): ToolCall | undefined {
-    // 已经设置过天数且用户没有说新的数字 → 跳过
-    const m = input.match(/(\d+)\s*[天日]/);
-    if (m) {
-      const days = parseInt(m[1]);
-      if (days >= 1 && days <= 30) {
-        return { action: 'set_days', days: m[1] };
-      }
-    }
-    return undefined;
+    // 只匹配 "N天"（不用 "日" 避免和日期混淆），且天数合理（1-15）
+    // 排除日期上下文：前面有"月""号""日"的不算
+    const m = input.match(/(?:玩|旅游|行程|待|住|逛|停留|安排|计划)?(\d{1,2})\s*天/);
+    if (!m) return undefined;
+    const days = parseInt(m[1]);
+    if (days < 1 || days > 15) return undefined;
+    return { action: 'set_days', days: m[1] };
   }
 
   /** 检测跨城交通搜索意图 — 绕过 AI，直接返回工具调用 */
