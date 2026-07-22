@@ -99,7 +99,7 @@ export function createEmptyPlan(): TourPlan {
     city: '',
     cityLat: 0,
     cityLng: 0,
-    days: 1,
+    days: 3,
     hotel: null,
     dailyPlans: [],
     status: 'gathering',
