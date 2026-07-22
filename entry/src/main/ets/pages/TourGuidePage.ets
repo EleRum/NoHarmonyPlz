@@ -49,6 +49,10 @@ async function saveToHistory(plan: TourPlan | null, messages: ChatBubble[]): Pro
     }
     const firstUser = messages.find(m => m.role === 'user');
     const title = firstUser ? firstUser.content.substring(0, 20) : '未命名对话';
+    // 去重：同样标题的只保留最新那条
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i].title === title) { list.splice(i, 1); }
+    }
     const id = Date.now().toString();
     list.unshift({ id, title, date: new Date().toLocaleDateString() });
     if (list.length > MAX_HISTORY) list = list.slice(0, MAX_HISTORY);
@@ -96,6 +100,8 @@ export struct TourGuideContent {
   @State chatScrollHeight: number = 160;
   @State showHistory: boolean = false;
   @State historyList: TourHistoryItem[] = [];
+  @State isStopping: boolean = false;
+  private stopRequested: boolean = false;
   private chatDragStartH: number = 0;
   private chatScroller: Scroller = new Scroller();
   private quickReplyPoiData: PoiResult[] = [];
@@ -242,6 +248,8 @@ export struct TourGuideContent {
     const input: string = this.chatInput.trim();
     if (!input || this.isAiThinking) return;
 
+    this.stopRequested = false;
+    this.isStopping = false;
     this.chatMessages.push({ role: 'user', content: input });
     this.chatInput = '';
     this.chatScroller.scrollEdge(Edge.Bottom);
@@ -388,12 +396,14 @@ export struct TourGuideContent {
         if (aiQr.length > 0) this.quickReplies = aiQr;
 
         // 链式调用：AI 返回的 + 系统自动串联的，合并成新批次
-        const chainTools: ToolCall[] = [...aiResp.toolCalls, ...resp.toolCalls];
-        if (chainTools.length > 0) {
-          const chainNames: string = chainTools.map(tc => tc.action).join('+');
-          this.chatMessages.push({ role: 'ai', content: '🔍 ' + chainNames + '...' });
-          this.chatScroller.scrollEdge(Edge.Bottom);
-          await this.autoExecuteTools(chainTools);
+        if (!this.stopRequested) {
+          const chainTools: ToolCall[] = [...aiResp.toolCalls, ...resp.toolCalls];
+          if (chainTools.length > 0) {
+            const chainNames: string = chainTools.map(tc => tc.action).join('+');
+            this.chatMessages.push({ role: 'ai', content: '🔍 ' + chainNames + '...' });
+            this.chatScroller.scrollEdge(Edge.Bottom);
+            await this.autoExecuteTools(chainTools);
+          }
         }
       } catch (_e) {
         // Phase 2 失败不丢 Phase 1 的结果，只去掉 🔍 占位
@@ -1082,6 +1092,15 @@ export struct TourGuideContent {
             })
           if (this.isAiThinking) {
             LoadingProgress().width(14).height(14).color('#8B5CF6')
+            Button('⏹ 停止').fontSize(10).fontColor('#FF5252').height(22).padding({ left: 6, right: 6 })
+              .backgroundColor('#FFF0F0').borderRadius(6).margin({ left: 6 })
+              .onClick(() => {
+                this.stopRequested = true;
+                this.isAiThinking = false;
+                this.isStopping = true;
+                this.chatMessages.push({ role: 'ai', content: '⏹ 已停止生成。' });
+                this.chatScroller.scrollEdge(Edge.Bottom);
+              })
           }
         }.width('100%').margin({ bottom: 4 })
         .gesture(
