@@ -23,31 +23,53 @@ export class HarmonyDatabase implements IDatabase {
 
   async open(name: string): Promise<void> {
     if (this.store) return;
-    STORE_CONFIG.name = name;
-    this.store = await relationalStore.getRdbStore(this.context, STORE_CONFIG);
-    Logger.info(TAG, 'Database opened: %{public}s', name);
+    const storeConfig: relationalStore.StoreConfig = {
+      name: name,
+      securityLevel: STORE_CONFIG.securityLevel
+    };
+    try {
+      this.store = await relationalStore.getRdbStore(this.context, storeConfig);
+      Logger.info(TAG, 'Database opened: %{public}s', name);
+    } catch (e) {
+      this.store = null;
+      Logger.error(TAG, 'Database open failed: %{public}s', JSON.stringify(e));
+    }
   }
 
   async executeSql(sql: string, bindArgs?: ValueType[]): Promise<void> {
-    this.ensureOpen();
-    await this.store!.executeSql(sql, bindArgs ?? []);
+    if (!this.isOpen()) return;
+    try {
+      await this.store!.executeSql(sql, bindArgs ?? []);
+    } catch (e) {
+      Logger.error(TAG, 'executeSql failed: %{public}s', JSON.stringify(e));
+    }
   }
 
   async querySql(sql: string, bindArgs?: ValueType[]): Promise<IResultSet> {
-    this.ensureOpen();
-    const rs = await this.store!.querySql(sql, bindArgs ?? []);
-    return new HarmonyResultSet(rs);
+    if (!this.isOpen()) return new EmptyResultSet();
+    try {
+      const rs = await this.store!.querySql(sql, bindArgs ?? []);
+      return new HarmonyResultSet(rs);
+    } catch (e) {
+      Logger.error(TAG, 'querySql failed: %{public}s', JSON.stringify(e));
+      return new EmptyResultSet();
+    }
   }
 
   async insert(table: string, values: ValuesBucket): Promise<number> {
-    this.ensureOpen();
-    const rowId = await this.store!.insert(table, values as relationalStore.ValuesBucket);
-    return rowId;
+    if (!this.isOpen()) return -1;
+    try {
+      const rowId = await this.store!.insert(table, values as relationalStore.ValuesBucket);
+      return rowId;
+    } catch (e) {
+      Logger.error(TAG, 'insert failed: %{public}s', JSON.stringify(e));
+      return -1;
+    }
   }
 
   async update(table: string, values: ValuesBucket, whereClause: string,
     whereArgs?: ValueType[]): Promise<number> {
-    this.ensureOpen();
+    if (!this.isOpen()) return 0;
     // 使用 executeSql 方式实现 update，避免 predicates 兼容问题
     const setClauses: string[] = [];
     const args: ValueType[] = [];
@@ -60,9 +82,6 @@ export class HarmonyDatabase implements IDatabase {
     for (const a of whereArgList) {
       args.push(a);
     }
-    // 计算占位符数量
-    const placeholders = whereClause.split('?').length - 1;
-    const actualWhereArgs = args.slice(args.length - placeholders);
     const sqlArgs = args;
 
     try {
@@ -78,7 +97,7 @@ export class HarmonyDatabase implements IDatabase {
   }
 
   async delete(table: string, whereClause: string, whereArgs?: ValueType[]): Promise<number> {
-    this.ensureOpen();
+    if (!this.isOpen()) return 0;
     try {
       const sql = `DELETE FROM ${table} WHERE ${whereClause}`;
       await this.store!.executeSql(sql, whereArgs ?? []);
@@ -91,31 +110,55 @@ export class HarmonyDatabase implements IDatabase {
   }
 
   private async getChanges(): Promise<number> {
+    if (!this.isOpen()) return 0;
+    let rs: relationalStore.ResultSet | null = null;
     try {
-      const rs = await this.store!.querySql('SELECT changes() AS cnt');
+      rs = await this.store!.querySql('SELECT changes() AS cnt');
       if (rs.goToFirstRow()) {
-        return rs.getLong(rs.getColumnIndex('cnt'));
+        const idx: number = rs.getColumnIndex('cnt');
+        return rs.getLong(idx);
       }
-      rs.close();
     } catch (e) {
-      // fallback
+      Logger.warn(TAG, 'getChanges failed: %{public}s', JSON.stringify(e));
+    } finally {
+      if (rs) {
+        try { rs.close(); } catch (_e) { /* ignore */ }
+      }
     }
     return 0;
   }
 
   async close(): Promise<void> {
-    if (this.store) {
+    if (!this.store) return;
+    try {
       this.store.close();
-      this.store = null;
       Logger.info(TAG, 'Database closed');
+    } catch (e) {
+      Logger.warn(TAG, 'Database close failed: %{public}s', JSON.stringify(e));
+    } finally {
+      this.store = null;
     }
   }
 
-  private ensureOpen(): void {
+  private isOpen(): boolean {
     if (!this.store) {
-      throw new Error('Database not opened. Call open() first.');
+      Logger.warn(TAG, 'Database not opened. Call open() first.');
+      return false;
     }
+    return true;
   }
+}
+
+class EmptyResultSet implements IResultSet {
+  get columnCount(): number { return 0; }
+  goToNextRow(): boolean { return false; }
+  getString(_columnIndex: number): string { return ''; }
+  getLong(_columnIndex: number): number { return 0; }
+  getDouble(_columnIndex: number): number { return 0; }
+  getBlob(_columnIndex: number): Uint8Array { return new Uint8Array(0); }
+  isNull(_columnIndex: number): boolean { return true; }
+  getRow(): ValuesBucket { return {}; }
+  close(): void {}
 }
 
 /** HarmonyOS ResultSet → IResultSet 适配器 */
@@ -127,39 +170,42 @@ class HarmonyResultSet implements IResultSet {
   }
 
   get columnCount(): number {
-    return this.rs.columnCount;
+    try { return this.rs.columnCount; } catch (_e) { return 0; }
   }
 
   goToNextRow(): boolean {
-    return this.rs.goToNextRow();
+    try { return this.rs.goToNextRow(); } catch (_e) { return false; }
   }
 
   getString(columnIndex: number): string {
-    return this.rs.getString(columnIndex);
+    try { return this.rs.getString(columnIndex); } catch (_e) { return ''; }
   }
 
   getLong(columnIndex: number): number {
-    return this.rs.getLong(columnIndex);
+    try { return this.rs.getLong(columnIndex); } catch (_e) { return 0; }
   }
 
   getDouble(columnIndex: number): number {
-    return this.rs.getDouble(columnIndex);
+    try { return this.rs.getDouble(columnIndex); } catch (_e) { return 0; }
   }
 
   getBlob(columnIndex: number): Uint8Array {
-    return this.rs.getBlob(columnIndex);
+    try { return this.rs.getBlob(columnIndex); } catch (_e) { return new Uint8Array(0); }
   }
 
   isNull(columnIndex: number): boolean {
-    return this.rs.isColumnNull(columnIndex);
+    try { return this.rs.isColumnNull(columnIndex); } catch (_e) { return true; }
   }
 
   getRow(): ValuesBucket {
-    // 直接使用原生 getRow() 保留正确的列类型
-    return this.rs.getRow() as ValuesBucket;
+    try {
+      return this.rs.getRow() as ValuesBucket;
+    } catch (_e) {
+      return {};
+    }
   }
 
   close(): void {
-    this.rs.close();
+    try { this.rs.close(); } catch (_e) { /* ignore */ }
   }
 }
