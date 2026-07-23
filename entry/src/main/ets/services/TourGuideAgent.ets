@@ -146,6 +146,10 @@ export interface ToolCall {
   // 修改计划相关
   dayIndex?: string;
   poiIndex?: string;
+  fromIndex?: string;
+  toIndex?: string;
+  targetName?: string;
+  replacement?: string;
   name?: string;
   lat?: string;
   lng?: string;
@@ -413,9 +417,10 @@ export class TourGuideAgent {
    *  排除对已有计划的修改请求（如"第一天去看XX"） */
   private isNewTripRequest(input: string): boolean {
     const lower: string = input.toLowerCase();
-    // 明确指向已有某一天 → 修改请求，不是新规划
+    // 明确指向已有某一天或修改动词 → 修改请求，不是新规划
     if (/第[一二三四五六七八\d]+天/.test(lower)) return false;
     if (/day\s*\d+/i.test(lower)) return false;
+    if (/(换成|替换成|改成|改为|去掉|删除|移除|不要|别|移动|移到|挪到|调整到)/.test(lower)) return false;
 
     return lower.includes('想去') || lower.includes('规划') || lower.includes('重新') ||
       lower.includes('换') || lower.includes('新') || lower.includes('再去');
@@ -430,6 +435,165 @@ export class TourGuideAgent {
     if (map[s]) return map[s];
     const n: number = parseInt(s);
     return isNaN(n) ? 1 : n;
+  }
+
+  private getDateAfterDays(days: number): string {
+    const today: Date = new Date();
+    const target: Date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + days);
+    return `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
+  }
+
+  private extractRelativeDate(input: string): string | undefined {
+    const m: RegExpMatchArray | null = input.match(/(今天|今日|当天|明天|后天|大后天)/);
+    if (!m) return undefined;
+    let offset: number = 0;
+    if (m[1] === '明天') offset = 1;
+    else if (m[1] === '后天') offset = 2;
+    else if (m[1] === '大后天') offset = 3;
+    return this.getDateAfterDays(offset);
+  }
+
+  private normalizeTravelPlace(raw: string): string {
+    if (!raw) return '';
+    let name: string = raw.trim();
+    name = name.replace(/[，,。.!！?？]/g, '');
+    name = name.replace(/(?:地区|片区|周边|附近|市区|城区)$/g, '');
+    name = name.replace(/[市省]$/g, '');
+    if (name.includes('潮汕')) return '潮汕';
+    if (name.includes('中山北')) return '中山北';
+    if (name.includes('中山')) return '中山';
+    if (name.includes('揭阳南')) return '揭阳';
+    if (name.includes('揭阳')) return '揭阳';
+    if (name.includes('汕尾')) return '汕尾';
+    if (name.includes('鲘门')) return '鲘门';
+    if (name.includes('潮阳')) return '潮阳';
+    if (name.includes('普宁')) return '普宁';
+    if (name.includes('葵潭')) return '葵潭';
+    if (name.includes('汕头')) return '汕头';
+    return name;
+  }
+
+  private cleanPoiKeyword(raw: string): string {
+    return raw.trim()
+      .replace(/^第[一二三四五六七八\d]+天(?:的)?/g, '')
+      .replace(/^(把|将|把这个|这个)/g, '')
+      .replace(/(?:吧|一下|可以吗|行吗)$/g, '')
+      .replace(/[，,。.!！?？]/g, '')
+      .trim();
+  }
+
+  private findPoiIndexByName(day: TourDay, rawName: string): number {
+    const target: string = this.cleanPoiKeyword(rawName);
+    if (target.length < 2) return -1;
+    for (let i: number = 0; i < day.pois.length; i++) {
+      const poi: TourPoiItem = day.pois[i];
+      if (isMarkerPoi(poi) || poi.type.includes('酒店') || poi.type.includes('住宿')) continue;
+      if (poi.name.includes(target) || target.includes(poi.name)) return i;
+    }
+    return -1;
+  }
+
+  private detectTimeSlotHint(input: string): string {
+    if (input.includes('上午') || input.includes('早上') || input.includes('早餐')) return '上午9:00';
+    if (input.includes('中午') || input.includes('午餐')) return '中午12:00';
+    if (input.includes('下午')) return '下午14:00';
+    if (input.includes('晚上') || input.includes('晚餐')) return '晚上18:00';
+    return '';
+  }
+
+  private detectReplacementIntents(input: string): ToolCall[] {
+    if (this.plan.dailyPlans.length === 0) return [];
+    if (!/(换成|替换成|改成|改为)/.test(input)) return [];
+
+    const dayMatch: RegExpMatchArray | null = input.match(/第([一二三四五六七八\d]+)天/);
+    const dayIdxFromText: number = dayMatch ? this.parseDayNumber(dayMatch[1]) - 1 : -1;
+
+    const idxReplace: RegExpMatchArray | null = input.match(/第([一二三四五六七八\d]+)天.*?第([一二三四五六七八\d]+)个.*?(?:换成|替换成|改成|改为)([^，。,.！!？?]{2,24})/);
+    if (idxReplace) {
+      const dayIdx: number = this.parseDayNumber(idxReplace[1]) - 1;
+      const poiIdx: number = this.parseDayNumber(idxReplace[2]) - 1;
+      const replacement: string = this.cleanPoiKeyword(idxReplace[3]);
+      if (dayIdx >= 0 && dayIdx < this.plan.dailyPlans.length && replacement.length >= 2) {
+        const day: TourDay = this.plan.dailyPlans[dayIdx];
+        if (poiIdx >= 0 && poiIdx < day.pois.length) {
+          const oldPoi: TourPoiItem = day.pois[poiIdx];
+          const add: ToolCall = { action: 'search_and_add', keywords: replacement, dayIndex: dayIdx.toString() };
+          if (oldPoi.timeSlot) add.timeSlot = oldPoi.timeSlot;
+          if (oldPoi.mode) add.mode = oldPoi.mode;
+          return [
+            { action: 'remove_poi_from_day', dayIndex: dayIdx.toString(), poiIndex: poiIdx.toString() },
+            add
+          ];
+        }
+      }
+    }
+
+    const replaceMatch: RegExpMatchArray | null = input.match(/(?:把|将)?([^，。,.！!？?]{2,18}?)(?:换成|替换成|改成|改为)([^，。,.！!？?]{2,24})/);
+    if (!replaceMatch) return [];
+    const oldName: string = this.cleanPoiKeyword(replaceMatch[1]);
+    const newName: string = this.cleanPoiKeyword(replaceMatch[2]);
+    if (oldName.length < 2 || newName.length < 2) return [];
+
+    const dayIndices: number[] = [];
+    if (dayIdxFromText >= 0) dayIndices.push(dayIdxFromText);
+    else {
+      for (let d: number = 0; d < this.plan.dailyPlans.length; d++) dayIndices.push(d);
+    }
+
+    for (const dayIdx of dayIndices) {
+      if (dayIdx < 0 || dayIdx >= this.plan.dailyPlans.length) continue;
+      const day: TourDay = this.plan.dailyPlans[dayIdx];
+      const poiIdx: number = this.findPoiIndexByName(day, oldName);
+      if (poiIdx >= 0) {
+        const oldPoi: TourPoiItem = day.pois[poiIdx];
+        const add: ToolCall = { action: 'search_and_add', keywords: newName, dayIndex: dayIdx.toString() };
+        if (oldPoi.timeSlot) add.timeSlot = oldPoi.timeSlot;
+        if (oldPoi.mode) add.mode = oldPoi.mode;
+        return [
+          { action: 'remove_poi_from_day', dayIndex: dayIdx.toString(), poiIndex: poiIdx.toString() },
+          add
+        ];
+      }
+    }
+
+    return [];
+  }
+
+  private detectMoveIntent(input: string): ToolCall | undefined {
+    if (this.plan.dailyPlans.length === 0) return undefined;
+    const moveMatch: RegExpMatchArray | null = input.match(/第([一二三四五六七八\d]+)天.*?第([一二三四五六七八\d]+)个.*?(?:移到|移动到|挪到|放到|调整到|改到)(.*)/);
+    if (!moveMatch) return undefined;
+    const dayIdx: number = this.parseDayNumber(moveMatch[1]) - 1;
+    const fromIdx: number = this.parseDayNumber(moveMatch[2]) - 1;
+    if (dayIdx < 0 || dayIdx >= this.plan.dailyPlans.length) return undefined;
+    const targetText: string = moveMatch[3] || '';
+    const tc: ToolCall = { action: 'move_poi_in_day', dayIndex: dayIdx.toString(), fromIndex: fromIdx.toString() };
+    const timeSlot: string = this.detectTimeSlotHint(targetText);
+    if (timeSlot.length > 0) {
+      tc.timeSlot = timeSlot;
+      return tc;
+    }
+    if (targetText.includes('最前') || targetText.includes('开头')) {
+      tc.toIndex = '0';
+      return tc;
+    }
+    if (targetText.includes('最后') || targetText.includes('末尾')) {
+      tc.toIndex = (this.plan.dailyPlans[dayIdx].pois.length - 1).toString();
+      return tc;
+    }
+    const toMatch: RegExpMatchArray | null = targetText.match(/第([一二三四五六七八\d]+)个/);
+    if (toMatch) {
+      tc.toIndex = (this.parseDayNumber(toMatch[1]) - 1).toString();
+      return tc;
+    }
+    return undefined;
+  }
+
+  private detectModificationIntents(input: string): ToolCall[] {
+    const replaceTools: ToolCall[] = this.detectReplacementIntents(input);
+    if (replaceTools.length > 0) return replaceTools;
+    const single: ToolCall | undefined = this.detectModificationIntent(input);
+    return single ? [single] : [];
   }
 
   /** 检测修改已有计划的意图，返回确定性工具调用（不依赖 AI 选择） */
@@ -453,6 +617,9 @@ export class TourGuideAgent {
     }
 
     if (this.plan.dailyPlans.length === 0) return undefined;
+
+    const moveIntent: ToolCall | undefined = this.detectMoveIntent(input);
+    if (moveIntent) return moveIntent;
 
     // 模式: 改成/换成 X天 → 调整计划天数
     const daysPattern = /(?:改[成为]?|换[成为]?|调整[成为]?|变成)([一二三四五六七八\d]+)天/;
@@ -500,12 +667,7 @@ export class TourGuideAgent {
       const dayNum: number = this.parseDayNumber(addMatch[1]);
       // 保留完整关键词列表（含逗号/顿号），不截断 — 顺序 = 用户说的顺序
       const kw: string = addMatch[2].trim().replace(/[。！!？?]+$/g, '');
-      let timeSlot: string = '';
-      const lower: string = input.toLowerCase();
-      if (lower.includes('上午') || lower.includes('早上') || lower.includes('早餐')) timeSlot = '上午9:00';
-      else if (lower.includes('中午') || lower.includes('午餐')) timeSlot = '中午12:00';
-      else if (lower.includes('下午')) timeSlot = '下午14:00';
-      else if (lower.includes('晚上') || lower.includes('晚餐')) timeSlot = '晚上18:00';
+      let timeSlot: string = this.detectTimeSlotHint(input);
 
       // 检测交通方式
       const mode: string | undefined = this.detectModeStr(input);
@@ -572,16 +734,9 @@ export class TourGuideAgent {
     // 必须包含交通关键词
     if (!(/高铁|火车|动车|飞机|航班|大巴|客车|怎么去|怎么到|查.*票|查.*车|查.*飞机|车次|班次|几趟|有哪些/.test(input))) return undefined;
 
-    // 提取日期并标准化（支持"7月20日""后天""明天"等）
-    let date: string | undefined = undefined;
-    // 相对日期：明天/后天/大后天
-    const relMatch = input.match(/(大?后天|明天)/);
-    if (relMatch) {
-      const today: Date = new Date();
-      const offset: number = relMatch[1] === '明天' ? 1 : (relMatch[1] === '后天' ? 2 : 3);
-      const target: Date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset);
-      date = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
-    } else {
+    // 提取日期并标准化（支持"今天""7月20日""后天""明天"等）
+    let date: string | undefined = this.extractRelativeDate(input);
+    if (!date) {
       const dateMatch = input.match(/(\d{1,2}月\d{1,2}[日号]|\d{4}-\d{2}-\d{2})/);
       if (dateMatch) date = this.normalizeDate(dateMatch[1]);
     }
@@ -593,9 +748,13 @@ export class TourGuideAgent {
     const m1 = input.match(/从([^\s,，。去到坐]{2,8})[到去坐][^\s,，。]{0,6}?([^\s,，。去到]{2,8})/);
     if (m1) { from = m1[1]; to = m1[2]; }
 
-    // 模式2: "A到B的高铁/火车/飞机/票"
+    // 模式2: "A到B的高铁/火车/飞机/票"，兼容 "A到B今天高铁"
     if (!from) {
-      const m2 = input.match(/([^\s,，。去到坐]{2,8})到([^\s,，。去]{2,8})[\s，,。]*(?:的|有)?(?:高铁|火车|飞机|动车|票|车票)/);
+      const m2Date = input.match(/([^\s,，。去到坐]{2,8})到([^\s,，。去]{2,8}?)(?:今天|今日|当天|明天|后天|大后天)(?:的|有)?(?:高铁|火车|飞机|动车|票|车票)/);
+      if (m2Date) { from = m2Date[1]; to = m2Date[2]; }
+    }
+    if (!from) {
+      const m2 = input.match(/([^\s,，。去到坐]{2,8})到([^\s,，。去]{2,8}?)[\s，,。]*(?:的|有)?(?:高铁|火车|飞机|动车|票|车票)/);
       if (m2) { from = m2[1]; to = m2[2]; }
     }
 
@@ -611,9 +770,9 @@ export class TourGuideAgent {
       if (m4) { to = m4[1]; }
     }
 
-    // 清洗城市名：去"市"字和交通关键词
-    if (from) from = from.replace(/[市省]$/, '');
-    if (to) to = to.replace(/[市省]$/, '');
+    // 清洗城市/站点名：潮汕地区、中山等要落到 12306 可识别站名
+    if (from) from = this.normalizeTravelPlace(from);
+    if (to) to = this.normalizeTravelPlace(to);
 
     if (from && to && from.length >= 2 && to.length >= 2 && from !== to) {
       const tc: ToolCall = { action: 'search_transport', from: from, to: to };
@@ -685,16 +844,19 @@ export class TourGuideAgent {
     }
 
     // 确定性修改意图检测：绕过 AI 工具选择，直接准备工具调用
-    const modIntent: ToolCall | undefined = this.detectModificationIntent(input);
-    // set_budget 无需 dailyPlans 即可执行；其他操作需要已有计划
-    if (modIntent && (modIntent.action === 'set_budget' || this.plan.dailyPlans.length > 0)) {
-      Logger.info(TAG, 'Modification intent detected: %{public}s', modIntent.action);
-      // 仍然发送给 AI 获取对话文本
-      const userMsg: string = '用户: ' + input;
-      const reply: ClaudeReply = await this.claude.chatConversation(userMsg, this.getSystemPrompt());
-      const text: string = reply.text || '好的，马上更新！';
-      // AI 文本 + 确定性工具调用
-      return { text: this.stripJson(text), toolCalls: [modIntent] };
+    const modIntents: ToolCall[] = this.detectModificationIntents(input);
+    const canRunMod: boolean = modIntents.length > 0 &&
+      (this.plan.dailyPlans.length > 0 || modIntents.every((tc: ToolCall) => tc.action === 'set_budget'));
+    if (canRunMod) {
+      Logger.info(TAG, 'Modification intents detected: %{public}s', modIntents.map((tc: ToolCall) => tc.action).join('+'));
+      let text: string = '好的，马上更新行程。';
+      try {
+        const userMsg: string = '用户: ' + input;
+        const reply: ClaudeReply = await this.claude.chatConversation(userMsg, this.getSystemPrompt());
+        const aiText: string = this.stripJson(reply.text || '');
+        if (aiText.length > 0 && !aiText.includes('请先设置AI密钥')) text = aiText;
+      } catch (_e) { /* use deterministic fallback text */ }
+      return { text, toolCalls: modIntents };
     }
 
     const userMsg: string = '用户: ' + input;
@@ -723,25 +885,18 @@ export class TourGuideAgent {
     // 提取出发城市
     const m = input.match(/从\s*([^\s,，。去到出发来走过]{2,8})\s*(?:出发|来|走|过去|过来|那边)?/);
     if (!m) return undefined;
-    let from: string = m[1].replace(/[市省]$/, '');
-    if (from.length < 2 || from === destCity) return undefined;
+    let from: string = this.normalizeTravelPlace(m[1]);
+    const dest: string = this.normalizeTravelPlace(destCity);
+    if (from.length < 2 || from === dest) return undefined;
 
     // 提取日期
-    let date: string | undefined = undefined;
-    // "明天" → 实际日期
-    const relativeMatch = input.match(/(明天|后天|大后天)/);
-    if (relativeMatch) {
-      const today: Date = new Date();
-      const offset: number = relativeMatch[1] === '明天' ? 1 : (relativeMatch[1] === '后天' ? 2 : 3);
-      const target: Date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset);
-      date = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
-    } else {
-      // "7月20日"等
-      const dm = input.match(/(\d{1,2}月\d{1,2}[日号])/);
+    let date: string | undefined = this.extractRelativeDate(input);
+    if (!date) {
+      const dm = input.match(/(\d{1,2}月\d{1,2}[日号]|\d{4}-\d{2}-\d{2})/);
       if (dm) date = dm[1];
     }
 
-    const tc: ToolCall = { action: 'search_transport', from: from, to: destCity };
+    const tc: ToolCall = { action: 'search_transport', from: from, to: dest };
     if (date) tc.date = this.normalizeDate(date);
     return tc;
   }
@@ -967,6 +1122,8 @@ export class TourGuideAgent {
 
           const newRank: number = this.getPeriodRankFromHint(saTimeSlotHint);
           const insertIdx: number = this.findChronologicalPosition(saDay, newRank, preferredHour);
+          const feasibility: FeasibilityResult = this.timeFeasibilityCheck(saDay, addedPois[0], insertIdx - 1);
+          const preTimeWarnings: string[] = feasibility.warnings.slice(0, 2);
 
           // 整个序列作为一个连续块插入，顺序 = keywords 顺序 = 用户说的顺序
           for (let i: number = addedPois.length - 1; i >= 0; i--) {
@@ -991,6 +1148,14 @@ export class TourGuideAgent {
 
           if (lastEnd > (saDay.dayEndMin ?? DEFAULT_DAY_END_MIN)) {
             resultText += ` ⚠️结束时间 ${formatClockTime(lastEnd)} 超过当天 ${formatClockTime(saDay.dayEndMin ?? DEFAULT_DAY_END_MIN)}`;
+          }
+
+          const timeWarnings: string[] = this.collectDayTimeWarnings(saDay);
+          for (const w of preTimeWarnings) {
+            if (timeWarnings.indexOf(w) < 0) timeWarnings.push(w);
+          }
+          if (timeWarnings.length > 0) {
+            resultText += `\n⚠️时间提醒：${timeWarnings.slice(0, 3).join('；')}`;
           }
 
           const mealSugs: string[] = this.getMissingMealSuggestions(saDay);
@@ -1220,20 +1385,25 @@ export class TourGuideAgent {
         break;
       }
       case 'search_transport': {
-        const stFrom: string = params['from'] ?? '';
-        const stTo: string = params['to'] ?? '';
+        const rawFrom: string = params['from'] ?? '';
+        const rawTo: string = params['to'] ?? '';
+        const stFrom: string = this.normalizeTravelPlace(rawFrom);
+        const stTo: string = this.normalizeTravelPlace(rawTo);
         const stDate: string = params['date'] ?? '';
         if (!stFrom || !stTo) {
           resultText = '请提供出发城市和到达城市。';
           break;
         }
 
-        // 标准化日期
+        // 标准化日期；未提供时按系统规则先查5天后，但文案必须说明这是临时兜底
         const normalizedDate: string = this.normalizeDate(stDate);
+        const queryDate: string = normalizedDate || this.getDateAfterDays(5);
+        const dateLabel: string = normalizedDate || queryDate;
+        const defaultDateNote: string = normalizedDate ? '' : '（未提供日期，先按5天后试查）';
 
         // 先发起高德查询（快速返回，不受12306影响）
         const amapPromise = AmapSearchService.getInstance()
-          .searchIntercityTransport(stFrom, stTo, normalizedDate || undefined);
+          .searchIntercityTransport(stFrom, stTo, queryDate);
 
         // 12306 查询加 60 秒超时保护（TLS握手可能需要较长时间）
         const trainTimeout = new Promise<TransportTicketOption[]>((_, reject) =>
@@ -1242,13 +1412,13 @@ export class TourGuideAgent {
         let trainDiag: string = '';
         try {
           webXmlResults = await Promise.race([
-            TransportSearchService.getInstance().searchAll(stFrom, stTo, normalizedDate),
+            TransportSearchService.getInstance().searchAll(stFrom, stTo, queryDate),
             trainTimeout,
           ]);
         } catch (e) {
           const errMsg: string = JSON.stringify(e);
           if (errMsg.includes('timeout')) {
-            trainDiag = '[超时] Promise.race 45s超时，12306未响应';
+            trainDiag = '[超时] Promise.race 60s超时，12306未响应';
           } else {
             trainDiag = '[异常] ' + errMsg.substring(0, 80);
           }
@@ -1268,7 +1438,6 @@ export class TourGuideAgent {
           if (fromCodes.length === 0) diagParts.push('[车站] 出发城市未匹配');
           if (toCodes.length === 0) diagParts.push('[车站] 到达城市未匹配');
           if (fromCodes.length > 0 && toCodes.length > 0) diagParts.push('[queryG] 返回空(无车次/被拦截)');
-          if (!normalizedDate) diagParts.push('[日期] 无法解析');
           trainDiag = diagParts.length > 0 ? diagParts.join(' | ') : '';
         }
 
@@ -1315,12 +1484,12 @@ export class TourGuideAgent {
 
           const diagPrefix: string = trainDiag ? '🔍' + trainDiag + '\n\n' : '';
           const srcNote: string = has12306 ? '（12306实时数据）' : '（高德方案）';
-          resultText = diagPrefix + `${stFrom}→${stTo}${stDate ? '（' + stDate + '）' : ''}查到${allOptions.length}个方案${srcNote}：\n${detailsStr}`;
+          resultText = diagPrefix + `${stFrom}→${stTo}（${dateLabel}）${defaultDateNote}查到${allOptions.length}个方案${srcNote}：\n${detailsStr}`;
           Logger.info(TAG, 'Transport: %{public}d options (%{public}d 12306 + %{public}d Amap) diag=%{public}s',
             allOptions.length, webXmlOptions.length, amapResults.length, trainDiag || 'none');
         } else {
           const diagLine: string = trainDiag ? '🔍' + trainDiag + '\n' : '';
-          resultText = diagLine + `暂未查到${stFrom}到${stTo}${stDate ? '（' + stDate + '）' : ''}的实时方案。`;
+          resultText = diagLine + `暂未查到${stFrom}到${stTo}（${dateLabel}）${defaultDateNote}的实时方案。\n建议：确认出行日期、换出发/到达站名，或稍后重试；如果12306被拦截，可先参考高德路线但不要当作已确认车票。`;
           Logger.info(TAG, 'Transport: no results for %{public}s→%{public}s', stFrom, stTo);
         }
         markers = undefined;
@@ -1370,7 +1539,7 @@ export class TourGuideAgent {
         if (!this.plan.transportToCity) {
           this.plan.transportToCity = transport;
           resultText = `已记录从${tFrom}到${tTo}的${getTransportLabel(tType)}${tNum ? ' ' + tNum : ''}${tDep ? ' ' + tDep : ''}。`;
-          // 下午到达 → 更新第一天的 dayStartMin，避免从 8:00 开始空等
+          // 下午/凌晨到达 → 更新第一天的 dayStartMin，避免从 8:00 开始空等
           if (this.plan.dailyPlans.length > 0) {
             const arrivalMin: number | undefined = this.parseArrivalStartMin();
             if (arrivalMin !== undefined) {
@@ -1379,6 +1548,8 @@ export class TourGuideAgent {
               Logger.info(TAG, 'Day 0 start updated to arrival time: ' + formatClockTime(arrivalMin));
             }
           }
+          const arrivalWarning: string = this.buildArrivalTimeWarning(tArr);
+          if (arrivalWarning.length > 0) resultText += '\n' + arrivalWarning;
           // 如果目的城市与当前计划城市不同，更新城市
           if (tTo !== this.plan.city && this.plan.city.length === 0) {
             const loc: LatLng | null = await AmapSearchService.getInstance().geocodeCity(tTo);
@@ -1467,6 +1638,52 @@ export class TourGuideAgent {
           ? ' ' + formatClockTime(newPoi.plannedStartMin) + '-' + formatClockTime(newPoi.plannedEndMin)
           : (poiTimeSlot ? ' ' + poiTimeSlot : '');
         resultText = '已将"' + poiName + '"添加到' + day.label + timeDisplay + '（游玩' + needMin + '分钟）。';
+        const addWarnings: string[] = this.collectDayTimeWarnings(day);
+        if (addWarnings.length > 0) resultText += '\n⚠️时间提醒：' + addWarnings.slice(0, 3).join('；');
+        break;
+      }
+      case 'move_poi_in_day': {
+        if (this.plan.dailyPlans.length === 0) {
+          resultText = '请先生成计划后再调整顺序。';
+          break;
+        }
+        const mvDayIdx: number = parseInt(params['dayIndex'] ?? '0');
+        const mvFromIdx: number = parseInt(params['fromIndex'] ?? params['poiIndex'] ?? '-1');
+        if (mvDayIdx < 0 || mvDayIdx >= this.plan.dailyPlans.length) {
+          resultText = `第${mvDayIdx + 1}天不存在。`;
+          break;
+        }
+        const mvDay: TourDay = this.plan.dailyPlans[mvDayIdx];
+        if (mvFromIdx < 0 || mvFromIdx >= mvDay.pois.length) {
+          resultText = `第${mvDayIdx + 1}天共${mvDay.pois.length}个地点，序号${mvFromIdx + 1}无效。`;
+          break;
+        }
+        const moving: TourPoiItem = mvDay.pois[mvFromIdx];
+        if (isMarkerPoi(moving) || moving.type.includes('酒店') || moving.type.includes('住宿')) {
+          resultText = '酒店/出发返回标记不建议移动。请移动具体景点或美食点。';
+          break;
+        }
+        mvDay.pois.splice(mvFromIdx, 1);
+        let targetIdx: number = parseInt(params['toIndex'] ?? '-1');
+        const targetSlot: string = params['timeSlot'] ?? '';
+        if (targetSlot.length > 0) {
+          moving.timeSlot = targetSlot;
+          const slotMatch: RegExpMatchArray | null = targetSlot.match(/(\d{1,2}):?(\d{2})?/);
+          let preferredHour: number = 12;
+          if (slotMatch) preferredHour = parseInt(slotMatch[1]);
+          else if (targetSlot.includes('早') || targetSlot.includes('上午')) preferredHour = 9;
+          else if (targetSlot.includes('中') || targetSlot.includes('午')) preferredHour = 12;
+          else if (targetSlot.includes('下')) preferredHour = 14;
+          else if (targetSlot.includes('晚')) preferredHour = 19;
+          targetIdx = this.findChronologicalPosition(mvDay, this.getPeriodRankFromHint(targetSlot), preferredHour);
+        }
+        if (targetIdx < 0) targetIdx = mvDay.pois.length;
+        targetIdx = Math.max(0, Math.min(targetIdx, mvDay.pois.length));
+        mvDay.pois.splice(targetIdx, 0, moving);
+        await this.recalcDayRoute(mvDay);
+        resultText = `已把${mvDay.label}的"${moving.name}"移动到第${targetIdx + 1}个位置。`;
+        const mvWarnings: string[] = this.collectDayTimeWarnings(mvDay);
+        if (mvWarnings.length > 0) resultText += '\n⚠️时间提醒：' + mvWarnings.slice(0, 3).join('；');
         break;
       }
       case 'remove_poi_from_day': {
@@ -1598,6 +1815,10 @@ export class TourGuideAgent {
     if (tc.days) p['days'] = tc.days;
     if (tc.dayIndex) p['dayIndex'] = tc.dayIndex;
     if (tc.poiIndex) p['poiIndex'] = tc.poiIndex;
+    if (tc.fromIndex) p['fromIndex'] = tc.fromIndex;
+    if (tc.toIndex) p['toIndex'] = tc.toIndex;
+    if (tc.targetName) p['targetName'] = tc.targetName;
+    if (tc.replacement) p['replacement'] = tc.replacement;
     if (tc.name) p['name'] = tc.name;
     if (tc.lat) p['lat'] = tc.lat;
     if (tc.lng) p['lng'] = tc.lng;
@@ -1627,7 +1848,7 @@ export class TourGuideAgent {
     if (this.plan.dailyPlans.length === 0) return false;
     for (const tc of toolCalls) {
       if (tc.action === 'make_plan' || tc.action === 'add_poi_to_day' ||
-          tc.action === 'remove_poi_from_day' || tc.action === 'search_and_add' ||
+          tc.action === 'remove_poi_from_day' || tc.action === 'move_poi_in_day' || tc.action === 'search_and_add' ||
           tc.action === 'estimate_costs' || tc.action === 'set_transport' ||
           tc.action === 'set_budget' || tc.action === 'set_day_bounds') return true;
     }
@@ -1665,6 +1886,8 @@ export class TourGuideAgent {
         return has(tc.name) && has(tc.lat) && has(tc.lng) ? '' : 'add_poi_to_day 需要 name、lat、lng；请先用 search_poi 搜索。';
       case 'remove_poi_from_day':
         return has(tc.dayIndex) && has(tc.poiIndex) ? '' : 'remove_poi_from_day 需要 dayIndex 和 poiIndex。';
+      case 'move_poi_in_day':
+        return has(tc.dayIndex) && (has(tc.fromIndex) || has(tc.poiIndex)) && (has(tc.toIndex) || has(tc.timeSlot)) ? '' : 'move_poi_in_day 需要 dayIndex、fromIndex，以及 toIndex 或 timeSlot。';
       case 'get_weather':
         return has(tc.city) || this.plan.city.length > 0 ? '' : 'get_weather 需要城市名。';
       default:
@@ -1741,7 +1964,7 @@ export class TourGuideAgent {
 
     // 写工具：会修改 this.plan，必须串行执行避免竞态
     const WRITE_ACTIONS: Set<string> = new Set([
-      'search_and_add', 'add_poi_to_day', 'remove_poi_from_day',
+      'search_and_add', 'add_poi_to_day', 'remove_poi_from_day', 'move_poi_in_day',
       'make_plan', 'set_budget', 'set_transport', 'estimate_costs'
     ]);
     const readOnly: ToolCall[] = otherCalls.filter(tc => !WRITE_ACTIONS.has(tc.action));
@@ -1884,6 +2107,8 @@ export class TourGuideAgent {
   /** 标准化日期格式为 YYYY-MM-DD */
   private normalizeDate(date: string): string {
     if (!date) return '';
+    const relDate: string | undefined = this.extractRelativeDate(date);
+    if (relDate) return relDate;
     // 已经是 YYYY-MM-DD 格式
     if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
     // "7月20日" / "07月20日" → 转为 YYYY-MM-DD
@@ -2062,8 +2287,22 @@ export class TourGuideAgent {
     return insertIdx;
   }
 
+  private buildArrivalTimeWarning(arrivalTime: string): string {
+    if (!arrivalTime) return '';
+    const m: RegExpMatchArray | null = arrivalTime.match(/(\d{1,2}):(\d{2})/);
+    if (!m) return '';
+    const arrMin: number = parseInt(m[1]) * 60 + parseInt(m[2]);
+    if (arrMin < 360 || arrivalTime.includes('次日') || arrivalTime.includes('凌晨')) {
+      return '⚠️到达时间接近凌晨。我已先按上午10:00开始第1天行程处理，请确认是到达当天游玩，还是休息后从下一天开始。';
+    }
+    if (arrMin >= 1320) {
+      return '⚠️到达时间较晚，建议确认第1天是否只安排入住和休息。';
+    }
+    return '';
+  }
+
   /** 从到达交通的 arrivalTime 解析起始分钟数（如 "7月20日 14:30" → 870）。
-   *  提前到达则保留缓冲（如 13:00 到 → 13:30 开始），上午到达用默认 8:00。 */
+   *  下午到达保留缓冲；凌晨到达先按10:00开始，并在工具结果里要求用户确认。 */
   private parseArrivalStartMin(): number | undefined {
     const t: InterCityTransport | undefined = this.plan.transportToCity;
     if (!t || !t.arrivalTime) return undefined;
@@ -2072,6 +2311,8 @@ export class TourGuideAgent {
     const hour: number = parseInt(m[1]);
     const min: number = parseInt(m[2]);
     const arrMin: number = hour * 60 + min;
+    // 凌晨到达 → 不默认从8:00硬玩，先按10:00给出保守计划并要求用户确认
+    if (arrMin < 360) return 600;
     // 上午/中午到达 → 默认 8:00 开始，时间充裕
     if (arrMin < 780) return undefined; // 13:00 前到达，保持默认
     // 下午到达 → 到达时间 + 30分钟缓冲（出站/放行李）
@@ -2180,6 +2421,25 @@ export class TourGuideAgent {
         suggestions.push(mw.label + '(' + formatClockTime(mw.startMin) + '-' + formatClockTime(mw.endMin) + ') — 建议安排晚餐');
     }
     return suggestions;
+  }
+
+  private collectDayTimeWarnings(day: TourDay): string[] {
+    const warnings: string[] = [];
+    const dayEnd: number = day.dayEndMin ?? DEFAULT_DAY_END_MIN;
+    for (const poi of day.pois) {
+      if (isMarkerPoi(poi)) continue;
+      if (poi.plannedStartMin !== undefined && poi.plannedEndMin !== undefined) {
+        if (poi.plannedEndMin > dayEnd) {
+          warnings.push(poi.name + '预计' + formatClockTime(poi.plannedEndMin) + '结束，超过当天' + formatClockTime(dayEnd));
+        }
+        const mealWarns: string[] = this.checkMealOverlap(poi.plannedStartMin, poi.plannedEndMin, poi.type);
+        for (const w of mealWarns) {
+          if (warnings.indexOf(w) < 0) warnings.push(w);
+        }
+      }
+      if (warnings.length >= 4) break;
+    }
+    return warnings;
   }
 
   private autoMode(lat1: number, lng1: number, lat2: number, lng2: number): DirectionMode {
@@ -2438,6 +2698,10 @@ export class TourGuideAgent {
     const days = this.objString(obj, 'days'); if (days) tc.days = days;
     const dayIndex = this.objString(obj, 'dayIndex'); if (dayIndex) tc.dayIndex = dayIndex;
     const poiIndex = this.objString(obj, 'poiIndex'); if (poiIndex) tc.poiIndex = poiIndex;
+    const fromIndex = this.objString(obj, 'fromIndex'); if (fromIndex) tc.fromIndex = fromIndex;
+    const toIndex = this.objString(obj, 'toIndex'); if (toIndex) tc.toIndex = toIndex;
+    const targetName = this.objString(obj, 'targetName'); if (targetName) tc.targetName = targetName;
+    const replacement = this.objString(obj, 'replacement'); if (replacement) tc.replacement = replacement;
     const name = this.objString(obj, 'name'); if (name) tc.name = name;
     const lat = this.objString(obj, 'lat'); if (lat) tc.lat = lat;
     const lng = this.objString(obj, 'lng'); if (lng) tc.lng = lng;

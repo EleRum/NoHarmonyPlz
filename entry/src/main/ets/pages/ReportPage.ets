@@ -9,6 +9,7 @@ import { ActivitySegment } from '../model/ActivitySegment';
 import { Dao } from '../database/Dao';
 import { ACTIVITY_LABELS } from '../common/Constants';
 import { getDayKey } from '../common/LocationUtils';
+import { ClaudeService, ClaudeReply } from '../services/ClaudeService';
 
 const TAG = 'ReportPage';
 
@@ -30,8 +31,12 @@ export struct ReportContent {
   @State totalFootprints: number = 0;
   @State totalSegments: number = 0;
   @State isLoading: boolean = true;
+  @State aiSummary: string = '';
+  @State isSummaryLoading: boolean = false;
 
   private dao: Dao = Dao.getInstance();
+  private summaryAi: ClaudeService = new ClaudeService();
+  private summaryRequestId: number = 0;
 
   aboutToAppear(): void {
     Logger.info(TAG, 'ReportPage aboutToAppear');
@@ -87,9 +92,56 @@ export struct ReportContent {
       this.weekStats = weekStatsList;
       this.totalFootprints = totalFp;
       this.totalSegments = totalAct;
+      this.aiSummary = this.buildLocalSummary();
       this.isLoading = false;
+      this.generateAiSummary();
     } catch (err) {
+      this.aiSummary = '报告数据读取失败，请稍后重试。';
       this.isLoading = false;
+    }
+  }
+
+  private buildLocalSummary(): string {
+    if (this.totalFootprints <= 0 && this.totalSegments <= 0) {
+      return '还没有足够的出行数据，开启后台定位后，系统会在这里生成行程摘要。';
+    }
+    const activeDays: number = this.weekStats.length;
+    const topActivity: string = this.todayStats ? this.todayStats.topActivity : '暂无';
+    const topPlace: string = this.todayStats ? this.todayStats.topPlace : '暂无';
+    return `本周记录${activeDays}个活跃日、${this.totalFootprints}个足迹点、${this.totalSegments}段活动。今日主要活动是${topActivity}，主要地点是${topPlace}。建议继续积累数据后查看更稳定的出行节奏和偏好总结。`;
+  }
+
+  private buildAiSummaryPrompt(): string {
+    const weekLines: string[] = [];
+    for (const day of this.weekStats) {
+      weekLines.push(`${day.label}: ${day.footprintCount}个足迹，主要活动${day.topActivity}，地点${day.topPlace}`);
+    }
+    return `请根据以下出行统计生成一段80字以内的中文报告摘要，只基于数据，不要编造未出现的地点或建议。\n总足迹:${this.totalFootprints}\n活动片段:${this.totalSegments}\n今日:${this.todayStats ? this.todayStats.label + ' ' + this.todayStats.footprintCount + '个足迹 ' + this.todayStats.topActivity + ' ' + this.todayStats.topPlace : '暂无'}\n最近7天:${weekLines.join('；')}`;
+  }
+
+  private cleanSummaryText(raw: string): string {
+    if (!raw) return '';
+    return raw.replace(/---JSON---[\s\S]*$/g, '').replace(/\s+/g, ' ').trim().substring(0, 160);
+  }
+
+  async generateAiSummary(): Promise<void> {
+    const requestId: number = ++this.summaryRequestId;
+    if (this.totalFootprints <= 0 && this.totalSegments <= 0) return;
+    this.isSummaryLoading = true;
+    try {
+      await this.summaryAi.loadApiKey(true);
+      if (!this.summaryAi.hasKey) return;
+      const reply: ClaudeReply = await this.summaryAi.chatConversation(
+        this.buildAiSummaryPrompt(),
+        '你是旅行行为分析助手。输出中文自然语言摘要，最多80字，只基于用户统计数据，不要编造。'
+      );
+      if (requestId !== this.summaryRequestId) return;
+      const summary: string = this.cleanSummaryText(reply.text || '');
+      if (summary.length > 0 && !summary.includes('请先设置AI密钥')) this.aiSummary = summary;
+    } catch (_e) {
+      // 保留本地摘要兜底
+    } finally {
+      if (requestId === this.summaryRequestId) this.isSummaryLoading = false;
     }
   }
 
@@ -213,15 +265,17 @@ export struct ReportContent {
             .borderRadius(12).margin({ top: 4, bottom: 8 })
             .shadow({ radius: 4, color: '#10000000', offsetY: 2 })
 
-            // ── AI 摘要占位 ──
+            // ── AI 摘要 ──
             Column() {
               Row() {
                 Text('🤖 AI 摘要').fontSize(16).fontWeight(FontWeight.Bold).fontColor(getTheme(this.themeMode).textPrimary)
+                Blank()
+                if (this.isSummaryLoading) {
+                  LoadingProgress().width(16).height(16).color('#4A90D9')
+                }
               }.width('100%').margin({ bottom: 10 })
 
-              Text(this.totalFootprints > 0
-                ? '根据您的出行数据，您的生活规律正在被 Agent 学习中。随着数据积累，这里将自动生成每周行为总结和出行建议。'
-                : '还没有足够的出行数据，开启后台定位后，系统将在每晚自动生成行程摘要。')
+              Text(this.aiSummary)
                 .fontSize(13).fontColor(getTheme(this.themeMode).textSecondary).lineHeight(20)
             }
             .width('90%').padding(16).backgroundColor(getTheme(this.themeMode).surface)

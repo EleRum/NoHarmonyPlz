@@ -157,6 +157,7 @@ export struct MapPage {
   // ─── GPS/网络检测弹窗 ───
   private dialogController: CustomDialogController | null = null;
   private serviceDialogDismissed: boolean = false;
+  private focusTourPlanOnAppear: boolean = false;
   // ─── 用户信息（供 AI agent 上下文使用）───
   private agentUserName: string = '';
   private agentUserCity: string = '';
@@ -304,8 +305,26 @@ export struct MapPage {
     });
   }
 
+  private applyTourFocusParams(): boolean {
+    try {
+      const params = router.getParams() as Record<string, Object>;
+      if (!params || String(params['tourFocus'] ?? '') !== '1') return false;
+      const lat: number = parseFloat(String(params['tourLat'] ?? '0'));
+      const lng: number = parseFloat(String(params['tourLng'] ?? '0'));
+      if (lat === 0 || lng === 0) return false;
+      this.mapCenter = { latitude: lat, longitude: lng };
+      this.mapZoom = 13;
+      if (this.mapService) this.moveCamera();
+      Logger.info(TAG, 'Focused tour city from guide page: %{public}.4f, %{public}.4f', lat, lng);
+      return true;
+    } catch (_e) {
+      return false;
+    }
+  }
+
   aboutToAppear(): void {
     Logger.info(TAG, 'MapPage aboutToAppear');
+    this.focusTourPlanOnAppear = this.applyTourFocusParams();
     this.loadAllData();
     this.requestLocation();
     // 首次启动检测：无用户资料时进入欢迎引导流程
@@ -481,11 +500,13 @@ export struct MapPage {
           return;
         }
         if (location && location.latitude && location.longitude) {
-          this.mapCenter = { latitude: location.latitude, longitude: location.longitude };
           this.locationReady = true;
           Logger.info(TAG, 'Location acquired: %{public}.4f, %{public}.4f',
             location.latitude, location.longitude);
-          if (this.mapService) this.moveCamera();
+          if (!this.focusTourPlanOnAppear) {
+            this.mapCenter = { latitude: location.latitude, longitude: location.longitude };
+            if (this.mapService) this.moveCamera();
+          }
         } else {
           Logger.warn(TAG, 'Location returned empty coordinates');
         }
@@ -499,11 +520,13 @@ export struct MapPage {
     try {
       const last: geoLocationManager.Location | undefined = geoLocationManager.getLastLocation();
       if (last && last.latitude && last.longitude) {
-        this.mapCenter = { latitude: last.latitude, longitude: last.longitude };
         this.locationReady = true;
         Logger.info(TAG, 'Last location: %{public}.4f, %{public}.4f',
           last.latitude, last.longitude);
-        if (this.mapService) this.moveCamera();
+        if (!this.focusTourPlanOnAppear) {
+          this.mapCenter = { latitude: last.latitude, longitude: last.longitude };
+          if (this.mapService) this.moveCamera();
+        }
       }
     } catch (e) { /* ignore */ }
   }

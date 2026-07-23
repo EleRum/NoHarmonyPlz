@@ -150,7 +150,13 @@ const BUILTIN_STATIONS: Record<string, string[]> = {
   '佛山': ['FSQ', 'FOQ'],
   '东莞': ['DRQ', 'DAQ'],
   '惠州': ['HCQ', 'HUQ'],
-  '汕头': ['OTQ', 'SWQ'],
+  '中山': ['ZSQ', 'ZGQ'],
+  '中山北': ['ZGQ'],
+  '汕头': ['OTQ'],
+  '潮汕': ['CBQ'],
+  '潮阳': ['CNQ'],
+  '汕尾': ['OGQ'],
+  '鲘门': ['KMQ'],
   '湛江': ['ZWQ', 'ZJZ'],
   '肇庆': ['ZVQ', 'ZFQ'],
   '江门': ['JVQ', 'JWQ'],
@@ -158,7 +164,9 @@ const BUILTIN_STATIONS: Record<string, string[]> = {
   '韶关': ['SNQ', 'SGQ'],
   '梅州': ['MOQ', 'MZQ'],
   '潮州': ['CKQ', 'CZQ'],
-  '揭阳': ['JYQ', 'JRQ'],
+  '揭阳': ['JRQ'],
+  '普宁': ['PEQ'],
+  '葵潭': ['KTQ'],
   '清远': ['QBQ', 'QYQ'],
   '南宁': ['NNZ', 'NRZ'],
   '桂林': ['GLZ', 'GIZ', 'GEZ'],
@@ -365,8 +373,11 @@ const CODE_TO_STATION: Record<string, string> = {
   'DRQ': '东莞', 'DAQ': '东莞东', 'RRQ': '东莞南',
   // 惠州
   'HCQ': '惠州', 'HUQ': '惠州南',
-  // 汕头
-  'OTQ': '汕头', 'SWQ': '汕尾',
+  // 中山 / 潮汕
+  'ZSQ': '中山', 'ZGQ': '中山北',
+  'OTQ': '汕头', 'CBQ': '潮汕', 'CNQ': '潮阳',
+  'JRQ': '揭阳南', 'PEQ': '普宁', 'KTQ': '葵潭',
+  'OGQ': '汕尾', 'KMQ': '鲘门',
   // 湛江
   'ZWQ': '湛江', 'ZJZ': '湛江西',
   // 柳州
@@ -441,10 +452,28 @@ export class StationCodeService {
     return this.codeToNameMap.get(code) || code;
   }
 
+  private normalizeCityName(cityName: string): string {
+    let name: string = cityName.trim();
+    name = name.replace(/(?:地区|片区|周边|附近|市区|城区)$/g, '');
+    name = name.replace(/[市省]$/g, '');
+    if (name.includes('潮汕')) return '潮汕';
+    if (name.includes('中山北')) return '中山北';
+    if (name.includes('中山')) return '中山';
+    if (name.includes('揭阳南')) return '揭阳';
+    if (name.includes('揭阳')) return '揭阳';
+    if (name.includes('汕尾')) return '汕尾';
+    if (name.includes('鲘门')) return '鲘门';
+    if (name.includes('潮阳')) return '潮阳';
+    if (name.includes('普宁')) return '普宁';
+    if (name.includes('葵潭')) return '葵潭';
+    if (name.includes('汕头')) return '汕头';
+    return name;
+  }
+
   /** 获取城市的所有车站电报码 */
   getStationCodes(cityName: string): string[] {
     if (!cityName) return [];
-    const name: string = cityName.replace(/[市省]$/, '').trim();
+    const name: string = this.normalizeCityName(cityName);
 
     // 1. 精确匹配
     const codes: string[] | undefined = this.cityIndex.get(name);

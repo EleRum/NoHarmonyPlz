@@ -129,11 +129,14 @@ export struct TourGuideContent {
   @State historyList: TourHistoryItem[] = [];
   @State isStopping: boolean = false;
   private stopRequested: boolean = false;
+  private activeRunId: number = 0;
   private chatDragStartH: number = 0;
   private chatScroller: Scroller = new Scroller();
   private quickReplyPoiData: PoiResult[] = [];
   private dayPolylines: string[] = [];
   private dayMarkers: string[][] = [];
+  private dayStartMarkers: string[] = [];
+  private dayEndMarkers: string[] = [];
   private pendingToolCall: ToolCall | null = null;
   private markerPoiMap: Record<string, PoiResult> = {};
   private lastThemeDark: boolean = false;
@@ -166,6 +169,10 @@ export struct TourGuideContent {
     // 同步恢复的计划到 agent，防止 agent/UI 两套 plan 不同步导致预算丢失
     if (this.plan) {
       this.agent.setPlan(JSON.parse(JSON.stringify(this.plan)) as TourPlan);
+      if (this.plan.cityLat && this.plan.cityLng) {
+        this.mapCenter = { latitude: this.plan.cityLat, longitude: this.plan.cityLng };
+        this.mapZoom = 12;
+      }
     }
 
     // 加载用户偏好到"小途"agent（软引导，不强制）
@@ -270,11 +277,16 @@ export struct TourGuideContent {
     });
   }
 
+  private isRunStale(runId: number): boolean {
+    return runId !== this.activeRunId || this.stopRequested;
+  }
+
   /** 发送消息 */
   async sendMessage(): Promise<void> {
     const input: string = this.chatInput.trim();
     if (!input || this.isAiThinking) return;
 
+    const runId: number = ++this.activeRunId;
     this.stopRequested = false;
     this.isStopping = false;
     this.chainDepth = 0;
@@ -287,6 +299,7 @@ export struct TourGuideContent {
 
     try {
       const resp: AgentResponse = await this.agent.process(input);
+      if (this.isRunStale(runId)) return;
 
       // 优先使用 AI 生成的快捷回复
       let aiQuickReplies: string[] = resp.quickReplies || [];
@@ -305,7 +318,7 @@ export struct TourGuideContent {
           content: resp.text + `\n\n🔍 ${toolNames}...`
         });
         this.chatScroller.scrollEdge(Edge.Bottom);
-        await this.autoExecuteTools(resp.toolCalls);
+        await this.autoExecuteTools(resp.toolCalls, runId);
       } else {
         this.chatMessages.push({ role: 'ai', content: resp.text });
         this.chatScroller.scrollEdge(Edge.Bottom);
@@ -315,6 +328,7 @@ export struct TourGuideContent {
         }
       }
     } catch (_e) {
+      if (this.isRunStale(runId)) return;
       // 清理占位
       if (this.chatMessages.length > 0) {
         const last: ChatBubble = this.chatMessages[this.chatMessages.length - 1];
@@ -325,11 +339,12 @@ export struct TourGuideContent {
       this.chatMessages.push({ role: 'ai', content: '抱歉，出错了。请再试一次。' });
       this.chatScroller.scrollEdge(Edge.Bottom);
     } finally {
-      this.saveState();
-      this.isAiThinking = false;
-      // 强制每次对话后重绘地图，确保地图始终反映当前 plan
-      if (this.plan && this.plan.dailyPlans.length > 0 && this.isMapReady && this.mapService) {
-        this.drawPlanOnMap(this.plan); // 异步绘制，不阻塞UI
+      if (runId === this.activeRunId) {
+        this.saveState();
+        this.isAiThinking = false;
+        if (this.plan && this.plan.dailyPlans.length > 0 && this.isMapReady && this.mapService && !this.stopRequested) {
+          this.drawPlanOnMap(this.plan);
+        }
       }
     }
   }
@@ -347,8 +362,8 @@ export struct TourGuideContent {
   }
 
   private chainDepth: number = 0;
-  async autoExecuteTools(toolCalls: ToolCall[]): Promise<void> {
-    if (toolCalls.length === 0) return;
+  async autoExecuteTools(toolCalls: ToolCall[], runId: number = this.activeRunId): Promise<void> {
+    if (toolCalls.length === 0 || this.isRunStale(runId)) return;
     this.chainDepth++;
     if (this.chainDepth > 3) {
       Logger.warn(TAG, 'Chain depth limit reached, breaking');
@@ -357,11 +372,10 @@ export struct TourGuideContent {
     }
     const primaryAction: string = toolCalls[0].action;
     try {
-      // 第一阶段：批量执行工具（geocode 优先 + 其余并行）
-      // geocode 完成后立即回调 → 地图中心先跳，不等搜索
       let geoMoved: boolean = false;
       const resp: AgentResponse = await this.agent.executeToolsAndContinue(toolCalls,
         (phase: string, partial: AgentResponse) => {
+          if (this.isRunStale(runId)) return;
           if (phase === 'geocode_done' && this.isMapReady && this.mapService) {
             if (partial.mapCenter) {
               this.mapCenter = partial.mapCenter;
@@ -374,18 +388,16 @@ export struct TourGuideContent {
             Logger.info(TAG, 'Map updated after geocode phase');
           }
         });
+      if (this.isRunStale(runId)) return;
 
-      // 全部工具完成 → 完整地图更新
       if (resp.plan && (resp.plan.dailyPlans.length > 0 || toolCalls.some(tc => tc.action === 'set_budget'))) {
         this.plan = resp.plan;
         this.saveState();
         if (resp.plan.dailyPlans.length > 0) {
-          // 不清空临时标记！酒店搜索结果等应保持可见，等用户选定加入计划后自然更新
-          this.drawPlanOnMap(resp.plan); // 异步绘制：标记立即显示，路线后台计算
+          this.drawPlanOnMap(resp.plan);
         }
       }
       if (this.isMapReady && this.mapService) {
-        // 如果 geocode 回调已经移过了且新的 mapCenter 相同，跳过
         if (resp.mapCenter && !geoMoved) {
           this.mapCenter = resp.mapCenter;
           this.mapService.moveCamera(resp.mapCenter, 13);
@@ -401,58 +413,50 @@ export struct TourGuideContent {
         if (resp.transportOptions && resp.transportOptions.length > 0) {
           this.transportOptions = resp.transportOptions;
         }
-        // 只在 AI 没给快捷回复时用硬编码兜底
         if (this.quickReplies.length === 0) {
           this.updateQuickReplies(resp.markers || [], primaryAction);
         }
       }
 
-      // 第二阶段：询问 AI 下一步
       try {
         const results: import('../services/TourGuideAgent').ToolResult[] = this.agent.getLastToolResults();
         const aiResp: AgentResponse = await this.agent.askAiNextStep(results);
+        if (this.isRunStale(runId)) return;
 
-        // 替换占位消息并显示 AI 回复
         if (this.chatMessages.length > 0) {
           const last = this.chatMessages[this.chatMessages.length - 1];
           if (last.content.includes('🔍')) {
             this.chatMessages = this.chatMessages.slice(0, -1);
           }
         }
-        // 对于信息性工具和失败兜底，直接展示工具层结果，避免空返回被包装成成功。
         if (this.shouldShowToolResult(resp.text, toolCalls)) {
           this.chatMessages.push({ role: 'ai', content: resp.text });
           this.chatScroller.scrollEdge(Edge.Bottom);
         }
-        // 如果有意义的回复才添加
         if (aiResp.text && aiResp.text.length > 2 && aiResp.text !== '收到，请继续。') {
           this.chatMessages.push({ role: 'ai', content: aiResp.text });
           this.chatScroller.scrollEdge(Edge.Bottom);
         }
         this.saveState();
 
-        // AI 生成的快捷回复
         let aiQr: string[] = aiResp.quickReplies || [];
         for (const tc of [...aiResp.toolCalls, ...resp.toolCalls]) {
           if (tc.quickReplies && tc.quickReplies.length > 0) { aiQr = tc.quickReplies; break; }
         }
         if (aiQr.length > 0) this.quickReplies = aiQr;
 
-        // 链式调用：只自动跑只读工具（搜索/天气），写操作必须等用户确认
-        if (!this.stopRequested) {
-          const READ_ONLY: string[] = ['geocode_city', 'search_poi', 'search_hotels',
-            'search_transport', 'get_weather'];
-          const chainTools: ToolCall[] = [...aiResp.toolCalls, ...resp.toolCalls]
-            .filter(tc => READ_ONLY.indexOf(tc.action) >= 0);
-          if (chainTools.length > 0) {
-            const chainNames: string = chainTools.map(tc => tc.action).join('+');
-            this.chatMessages.push({ role: 'ai', content: '🔍 ' + chainNames + '...' });
-            this.chatScroller.scrollEdge(Edge.Bottom);
-            await this.autoExecuteTools(chainTools);
-          }
+        const READ_ONLY: string[] = ['geocode_city', 'search_poi', 'search_hotels',
+          'search_transport', 'get_weather'];
+        const chainTools: ToolCall[] = [...aiResp.toolCalls, ...resp.toolCalls]
+          .filter(tc => READ_ONLY.indexOf(tc.action) >= 0);
+        if (chainTools.length > 0 && !this.isRunStale(runId)) {
+          const chainNames: string = chainTools.map(tc => tc.action).join('+');
+          this.chatMessages.push({ role: 'ai', content: '🔍 ' + chainNames + '...' });
+          this.chatScroller.scrollEdge(Edge.Bottom);
+          await this.autoExecuteTools(chainTools, runId);
         }
       } catch (_e) {
-        // Phase 2 失败不丢 Phase 1 的结果，只去掉 🔍 占位
+        if (this.isRunStale(runId)) return;
         if (this.chatMessages.length > 0) {
           const last = this.chatMessages[this.chatMessages.length - 1];
           if (last.content.includes('🔍')) {
@@ -462,9 +466,9 @@ export struct TourGuideContent {
         Logger.warn(TAG, 'askAiNextStep failed, keeping phase1 result');
       }
     } catch (e) {
+      if (this.isRunStale(runId)) return;
       Logger.error(TAG, 'autoExecuteTools failed for %{public}s: %{public}s',
         primaryAction, JSON.stringify(e));
-      // 去掉占位消息
       if (this.chatMessages.length > 0) {
         const last = this.chatMessages[this.chatMessages.length - 1];
         if (last.content.includes('🔍')) {
@@ -543,7 +547,7 @@ export struct TourGuideContent {
 
     // 城市定位后 → 主动引导交通和预算
     if (action === 'geocode_city') {
-      this.quickReplies = ['🚄查车次', '🚄高铁', '✈️飞机', '设预算'];
+      this.quickReplies = ['🚄查车次', '🚄查高铁', '✈️查飞机', '设预算'];
       return;
     }
 
@@ -596,6 +600,9 @@ export struct TourGuideContent {
   /** 选中交通方案 → 直接记录，不经过AI */
   async selectTransportOption(opt: IntercityTransportOption): Promise<void> {
     this.transportOptions = [];
+    const runId: number = ++this.activeRunId;
+    this.stopRequested = false;
+    this.isStopping = false;
     const label: string = getTransportLabel(opt.type);
     // 直接构造 toolCall 并执行
     const toolCall: ToolCall = {
@@ -616,12 +623,14 @@ export struct TourGuideContent {
     this.chatScroller.scrollEdge(Edge.Bottom);
     this.isAiThinking = true;
     try {
-      await this.autoExecuteTools([toolCall]);
+      await this.autoExecuteTools([toolCall], runId);
     } catch (_e) {
-      this.chatMessages.push({ role: 'ai', content: '记录交通方案失败，请重试。' });
-      this.chatScroller.scrollEdge(Edge.Bottom);
+      if (!this.isRunStale(runId)) {
+        this.chatMessages.push({ role: 'ai', content: '记录交通方案失败，请重试。' });
+        this.chatScroller.scrollEdge(Edge.Bottom);
+      }
     } finally {
-      this.isAiThinking = false;
+      if (runId === this.activeRunId) this.isAiThinking = false;
     }
   }
 
@@ -632,20 +641,16 @@ export struct TourGuideContent {
       this.sendMessage();
       return;
     }
-    if (reply === '🚄查车次') {
-      // 直接触发搜索：用当前计划城市作为目的地，让AI问出发城市
+    if (reply === '🚄查车次' || reply === '🚄查高铁' || reply === '✈️查飞机') {
       const dest: string = this.plan?.city || '';
-      if (dest) {
-        // 如果有 plan.transportToCity.from，直接查
-        const fromCity: string = this.plan?.transportToCity?.from || '';
-        if (fromCity) {
-          // 已知出发城市 → 让系统检测到交通意图
-          this.chatInput = `${fromCity}到${dest}高铁`;
-        } else {
-          this.chatInput = `怎么去${dest}`;
-        }
+      const fromCity: string = this.plan?.transportToCity?.from || '';
+      const modeWord: string = reply === '✈️查飞机' ? '飞机' : '高铁';
+      if (dest && fromCity) {
+        this.chatInput = `${fromCity}到${dest}的${modeWord}今天`;
+      } else if (dest) {
+        this.chatInput = `我想今天坐${modeWord}去${dest}`;
       } else {
-        this.chatInput = '查车次';
+        this.chatInput = `查${modeWord}`;
       }
       this.sendMessage();
       return;
@@ -705,6 +710,43 @@ export struct TourGuideContent {
       }
       this.dayMarkers.push(markers);
 
+      let startMarkerId: string = '';
+      let endMarkerId: string = '';
+      const routePts: LatLng[] = [];
+      if (day.route && day.route.path.length > 0) {
+        for (const pt of day.route.path) routePts.push(pt);
+      }
+      let startPoint: LatLng | null = routePts.length > 0 ? routePts[0] : null;
+      let endPoint: LatLng | null = routePts.length > 0 ? routePts[routePts.length - 1] : null;
+      if (!startPoint || !endPoint) {
+        for (const p of day.pois) {
+          if (p.lat !== 0 || p.lng !== 0) {
+            if (!startPoint) startPoint = { latitude: p.lat, longitude: p.lng } as LatLng;
+            endPoint = { latitude: p.lat, longitude: p.lng } as LatLng;
+          }
+        }
+      }
+      if (startPoint && endPoint) {
+        startMarkerId = ms.addMarker({
+          position: startPoint as LatLng,
+          iconStyle: { color: '#10B981', size: 18, text: '起' },
+          title: day.label + ' 起点',
+          snippet: '路线方向',
+          clickable: false,
+          zIndex: 85,
+        });
+        endMarkerId = ms.addMarker({
+          position: endPoint as LatLng,
+          iconStyle: { color: '#EF4444', size: 18, text: '终' },
+          title: day.label + ' 终点',
+          snippet: '路线方向',
+          clickable: false,
+          zIndex: 85,
+        });
+      }
+      this.dayStartMarkers.push(startMarkerId);
+      this.dayEndMarkers.push(endMarkerId);
+
       if (day.route && day.route.path.length > 0) {
         const polyId: string = ms.addPolyline({
           points: day.route.path, color: color, width: 6, zIndex: 50, clickable: false,
@@ -731,7 +773,7 @@ export struct TourGuideContent {
       }
     }
 
-    this.selectedDayIndex = 0;
+    this.selectedDayIndex = Math.min(this.selectedDayIndex, Math.max(0, plan.dailyPlans.length - 1));
     this.syncDayVisibility();
 
     // 第二阶段：后台计算缺失的路线
@@ -795,6 +837,14 @@ export struct TourGuideContent {
         try { ms.setMarkerVisible(m, i === this.selectedDayIndex); } catch (_e) { /* ignore */ }
       }
     }
+    for (let i: number = 0; i < this.dayStartMarkers.length; i++) {
+      if (this.dayStartMarkers[i].length > 0) {
+        try { ms.setMarkerVisible(this.dayStartMarkers[i], i === this.selectedDayIndex); } catch (_e) { /* ignore */ }
+      }
+      if (this.dayEndMarkers[i].length > 0) {
+        try { ms.setMarkerVisible(this.dayEndMarkers[i], i === this.selectedDayIndex); } catch (_e) { /* ignore */ }
+      }
+    }
   }
 
   clearPlanOverlays(): void {
@@ -808,8 +858,20 @@ export struct TourGuideContent {
         try { ms.removeMarker(id); } catch (_e) { /* ignore */ }
       }
     }
+    for (const id of this.dayStartMarkers) {
+      if (id.length > 0) {
+        try { ms.removeMarker(id); } catch (_e) { /* ignore */ }
+      }
+    }
+    for (const id of this.dayEndMarkers) {
+      if (id.length > 0) {
+        try { ms.removeMarker(id); } catch (_e) { /* ignore */ }
+      }
+    }
     this.dayPolylines = [];
     this.dayMarkers = [];
+    this.dayStartMarkers = [];
+    this.dayEndMarkers = [];
   }
 
   poiEmoji(type: string): string {
@@ -873,6 +935,13 @@ export struct TourGuideContent {
     return result;
   }
 
+  private calcBudgetShareTotal(): number {
+    let total: number = 0;
+    const bars: Array<[string, number, string]> = this.buildBudgetBars();
+    for (const b of bars) total += b[1];
+    return Math.max(1, total);
+  }
+
   @Builder
   TransportInfoRow(transport: InterCityTransport, label: string) {
     Row() {
@@ -924,7 +993,7 @@ export struct TourGuideContent {
           .backgroundColor('#CC3B82F6').justifyContent(FlexAlign.Center)
           .shadow({ radius: 4, color: '#403B82F6', offsetY: 2 })
           .onClick(() => {
-            router.pushUrl({ url: 'pages/RecommendPage' });
+            try { router.pushUrl({ url: 'pages/RecommendPage' }); } catch (_e) { /* ignore */ }
           })
         }
         .width('100%').padding({ right: 12 }).margin({ top: 90 })
@@ -986,6 +1055,30 @@ export struct TourGuideContent {
               }
               .width('100%').height(3).backgroundColor('#E8E8E8').borderRadius(1).margin({ bottom: 4 })
 
+              // 预算占比图
+              if (this.buildBudgetBars().length > 0) {
+                Row() {
+                  ForEach(this.buildBudgetBars(), (cat: Array<string | number>) => {
+                    Row() {}
+                      .layoutWeight(cat[1] as number)
+                      .height('100%')
+                      .backgroundColor(cat[2] as string)
+                  })
+                }
+                .width('100%').height(12).borderRadius(6).clip(true)
+                .backgroundColor('#E8E8E8').margin({ top: 4, bottom: 4 })
+
+                Row() {
+                  ForEach(this.buildBudgetBars().slice(0, 4), (cat: Array<string | number>) => {
+                    Row() {
+                      Row() {}.width(6).height(6).borderRadius(3).backgroundColor(cat[2] as string)
+                      Text(`${(((cat[1] as number) / this.calcBudgetShareTotal()) * 100).toFixed(0)}%`)
+                        .fontSize(8).fontColor(getTheme(this.themeMode).textSecondary).margin({ left: 2 })
+                    }.margin({ right: 8 })
+                  })
+                }.width('100%').margin({ bottom: 2 })
+              }
+
               // 预算分类占比条
               Column() {
                 ForEach(this.buildBudgetBars(), (cat: Array<string | number>) => {
@@ -1004,6 +1097,37 @@ export struct TourGuideContent {
               }.width('100%').margin({ top: 4, bottom: 2 })
 
             }
+
+            Row() {
+              Button('随路推荐')
+                .fontSize(10).fontColor('#2563EB').height(24)
+                .padding({ left: 8, right: 8 })
+                .backgroundColor('#EFF6FF').borderRadius(8)
+                .onClick(() => {
+                  try { router.pushUrl({ url: 'pages/RecommendPage' }); } catch (_e) { /* ignore */ }
+                })
+              Button('去打卡')
+                .fontSize(10).fontColor('#059669').height(24)
+                .padding({ left: 8, right: 8 })
+                .backgroundColor('#ECFDF5').borderRadius(8).margin({ left: 6 })
+                .onClick(() => {
+                  try {
+                    router.pushUrl({
+                      url: 'pages/MapPage',
+                      params: {
+                        tourFocus: '1',
+                        tourCity: this.plan?.city || '',
+                        tourLat: (this.plan?.cityLat || 0).toString(),
+                        tourLng: (this.plan?.cityLng || 0).toString()
+                      }
+                    });
+                  } catch (_e) { /* ignore */ }
+                })
+              Text('起终点已标记')
+                .fontSize(9).fontColor(getTheme(this.themeMode).textSecondary)
+                .margin({ left: 8 })
+              Blank()
+            }.width('100%').margin({ top: 4, bottom: 4 })
 
             // POI 横滑列表
             Scroll() {
@@ -1127,6 +1251,8 @@ export struct TourGuideContent {
           Button('新对话').fontSize(11).fontColor('#FFFFFF').height(24).padding({ left: 8, right: 8 })
             .backgroundColor('#10B981').borderRadius(10).margin({ left: 6 })
             .onClick(async () => {
+              this.activeRunId++;
+              this.stopRequested = true;
               await saveToHistory(this.plan, this.chatMessages);
               this.agent.reset();
               this.plan = null;
@@ -1143,12 +1269,14 @@ export struct TourGuideContent {
               this.quickReplies = [];
               this.transportOptions = [];
               this.selectedDayIndex = 0;
+              this.stopRequested = false;
             })
           if (this.isAiThinking) {
             LoadingProgress().width(14).height(14).color('#8B5CF6')
             Button('⏹ 停止').fontSize(10).fontColor('#FF5252').height(22).padding({ left: 6, right: 6 })
               .backgroundColor('#FFF0F0').borderRadius(6).margin({ left: 6 })
               .onClick(() => {
+                this.activeRunId++;
                 this.stopRequested = true;
                 this.isAiThinking = false;
                 this.isStopping = true;
