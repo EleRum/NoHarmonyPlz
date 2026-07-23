@@ -15,14 +15,13 @@ import { UserBasicInfo } from '../model/UserBasicInfo';
 import { Footprint } from '../model/Footprint';
 import { ActivitySegment } from '../model/ActivitySegment';
 import { Dao } from '../database/Dao';
-import { formatTimestamp, haversineDistance, getDayKey } from '../common/LocationUtils';
+import { formatTimestamp, haversineDistance } from '../common/LocationUtils';
 import { ActivityClassifier } from '../services/ActivityClassifier';
 import { ACTIVITY_LABELS } from '../common/Constants';
 import { ProfileRefreshSignal, RecRefreshSignal, MapMarkerSignal } from '../common/TravelPreferenceTags';
 import { TimelineContent } from './TimelinePage';
 import { TravelJournalContent } from './TravelJournalPage';
 import { TourGuideContent } from './TourGuidePage';
-import { TourPlan, migrateTourPlan } from '../model/TourPlan';
 import { ProfileContent } from './ProfilePage';
 import { getTheme, isDarkTheme, FONT, RADIUS, SPACE } from '../common/Theme';
 import { AgentScheduler } from '../services/AgentScheduler';
@@ -32,7 +31,6 @@ import { Recommendation } from '../model/Recommendation';
 import { AiAgent, AgentReply } from '../services/AiAgent';
 import { CalibrationService } from '../services/CalibrationService';
 import { CalibrationSignal } from '../common/CalibrationSignal';
-import { TourExecutionService, TourExecutionSession, TourExecutionPoi } from '../services/TourExecutionService';
 import { IMapService, MapEventCallbacks } from '../services/map/IMapService';
 import { MapJsBridge } from '../services/map/MapJsBridge';
 import {
@@ -144,13 +142,6 @@ export struct MapPage {
   @State navOriginLat: number = 0;
   @State navOriginLng: number = 0;
   @State navOriginName: string = '当前位置';
-  // ─── 导游执行状态：TourGuidePage → MapPage 的共享闭环 ───
-  @State tourSession: TourExecutionSession | null = null;
-  @State tourActionMessage: string = '';
-  @State tourIsRouting: boolean = false;
-  private tourMarkerIds: string[] = [];
-  private tourExecutionFingerprint: string = '';
-  private savedTourPlanCenterFingerprint: string = '';
   // ─── Settings 页面刷新信号 ───
   @State settingsProfileRefreshKey: number = 0;
   private lastKnownProfileRefreshCounter: number = 0;
@@ -315,7 +306,7 @@ export struct MapPage {
 
   aboutToAppear(): void {
     Logger.info(TAG, 'MapPage aboutToAppear');
-    this.loadInitialMapData();
+    this.loadAllData();
     this.requestLocation();
     // 首次启动检测：无用户资料时进入欢迎引导流程
     this.checkFirstLaunch();
@@ -351,7 +342,6 @@ export struct MapPage {
         this.lastKnownMapMarkerCounter = MapMarkerSignal.counter;
         this.applyMapMarkerSetting();
       }
-      this.loadTourExecution();
       // 检测深色模式变化 → 切换高德地图样式
       const darkNow: boolean = isDarkTheme();
       if (darkNow !== this.lastThemeDark && this.mapService) {
@@ -373,47 +363,6 @@ export struct MapPage {
     if (this.dialogController) {
       this.dialogController.close();
       this.dialogController = null;
-    }
-  }
-
-  async loadInitialMapData(): Promise<void> {
-    try {
-      await this.loadAllData();
-      await this.loadTourExecution();
-      await this.applySavedTourPlanCenterIfNeeded();
-    } catch (e) {
-      Logger.warn(TAG, 'loadInitialMapData failed: %{public}s', JSON.stringify(e));
-    }
-  }
-
-  private applyTourExecutionCenterIfNeeded(session: TourExecutionSession | null): void {
-    if (!session || !session.active || !session.pois || session.pois.length === 0) return;
-    if (this.locationReady) return;
-    const poi: TourExecutionPoi | null = TourExecutionService.getCurrentPoi(session) || session.pois[0];
-    if (!poi || poi.lat === 0 || poi.lng === 0) return;
-    this.mapCenter = { latitude: poi.lat, longitude: poi.lng };
-    this.mapZoom = 14;
-    Logger.info(TAG, 'Applied active tour center: %{public}s', poi.name);
-    if (this.mapService && this.isMapReady) this.moveCamera();
-  }
-
-  private async applySavedTourPlanCenterIfNeeded(): Promise<void> {
-    if (this.locationReady || this.footprintCount > 0) return;
-    if (this.tourSession && this.tourSession.active) return;
-    const saved = await this.dao.queryUserProfile('tour_plan');
-    if (!saved || !saved.preferenceValue || saved.preferenceValue.length === 0) return;
-    try {
-      const plan: TourPlan = migrateTourPlan(JSON.parse(saved.preferenceValue) as TourPlan);
-      if (!plan || !plan.city || plan.cityLat === 0 || plan.cityLng === 0) return;
-      const fingerprint: string = `${plan.city}|${plan.cityLat.toFixed(4)}|${plan.cityLng.toFixed(4)}`;
-      if (fingerprint === this.savedTourPlanCenterFingerprint) return;
-      this.savedTourPlanCenterFingerprint = fingerprint;
-      this.mapCenter = { latitude: plan.cityLat, longitude: plan.cityLng };
-      this.mapZoom = 13;
-      Logger.info(TAG, 'Applied saved tour city center: %{public}s', plan.city);
-      if (this.mapService && this.isMapReady) this.moveCamera();
-    } catch (e) {
-      Logger.warn(TAG, 'applySavedTourPlanCenterIfNeeded failed: %{public}s', JSON.stringify(e));
     }
   }
 
@@ -584,7 +533,6 @@ export struct MapPage {
         }
         this.setupGpsTracking();
         this.moveCamera();
-        this.loadTourExecution();
         if (this.dayRoutes.length > 0) {
           this.drawOnMap();
           this.drawSegmentMarkers();
@@ -627,7 +575,6 @@ export struct MapPage {
         }
         this.setupGpsTracking();
         this.moveCamera();
-        this.loadTourExecution();
         if (this.dayRoutes.length > 0) {
           this.drawOnMap();
           this.drawSegmentMarkers();
@@ -1397,165 +1344,7 @@ export struct MapPage {
     if (index === 0) {
       // 切换回地图 tab 时刷新校准
       this.refreshCalibrationsAndRedraw();
-      this.loadTourExecution();
     }
-  }
-
-  async loadTourExecution(): Promise<void> {
-    const active: TourExecutionSession | null = await TourExecutionService.getActive();
-    const fingerprint: string = active
-      ? `${active.updatedAt}_${active.currentPoiIndex}_${TourExecutionService.checkedCount(active)}_${this.isMapReady ? 'ready' : 'pending'}`
-      : 'none';
-    if (fingerprint === this.tourExecutionFingerprint && this.tourMarkerIds.length > 0) return;
-    if (fingerprint === this.tourExecutionFingerprint && !active) return;
-    this.tourExecutionFingerprint = fingerprint;
-    this.tourSession = active;
-    this.applyTourExecutionCenterIfNeeded(active);
-    this.drawTourMarkers();
-  }
-
-  private currentTourPoi(): TourExecutionPoi | null {
-    return TourExecutionService.getCurrentPoi(this.tourSession);
-  }
-
-  private hasCurrentTourPoi(): boolean {
-    return this.currentTourPoi() !== null;
-  }
-
-  private tourPoiNameText(): string {
-    const poi: TourExecutionPoi | null = this.currentTourPoi();
-    return poi ? poi.name : '今日行程已完成';
-  }
-
-  private tourPoiMetaText(): string {
-    const poi: TourExecutionPoi | null = this.currentTourPoi();
-    if (!poi) return '可以结束本次导游执行';
-    const time: string = poi.timeSlot && poi.timeSlot.length > 0 ? poi.timeSlot : '当前站';
-    const type: string = poi.type && poi.type.length > 0 ? poi.type : '地点';
-    return `${time} · ${type}`;
-  }
-
-  private tourProgressText(): string {
-    if (!this.tourSession) return '';
-    return `${TourExecutionService.checkedCount(this.tourSession)}/${this.tourSession.pois.length}`;
-  }
-
-  private tourDistanceText(): string {
-    const poi: TourExecutionPoi | null = this.currentTourPoi();
-    if (!poi) return '全部站点已处理';
-    const dist: number = haversineDistance(this.mapCenter.latitude, this.mapCenter.longitude, poi.lat, poi.lng);
-    if (dist < 1000) return `距当前定位约 ${Math.round(dist)}m`;
-    return `距当前定位约 ${(dist / 1000).toFixed(1)}km`;
-  }
-
-  private clearTourMarkers(): void {
-    const ms = this.mapService;
-    if (ms) {
-      for (const id of this.tourMarkerIds) {
-        try { ms.removeMarker(id); } catch (_e) { /* ignore */ }
-      }
-    }
-    this.tourMarkerIds = [];
-  }
-
-  private drawTourMarkers(): void {
-    const ms = this.mapService;
-    this.clearTourMarkers();
-    if (!ms || !this.tourSession || !this.tourSession.active) return;
-    for (let i = 0; i < this.tourSession.pois.length; i++) {
-      const poi: TourExecutionPoi = this.tourSession.pois[i];
-      const isCurrent: boolean = i === this.tourSession.currentPoiIndex && !poi.checked;
-      const markerId: string = ms.addMarker({
-        position: { latitude: poi.lat, longitude: poi.lng },
-        iconStyle: { color: poi.checked ? '#9CA3AF' : (isCurrent ? '#3B82F6' : '#10B981'), size: isCurrent ? 28 : 22 },
-        title: `${poi.checked ? '已打卡' : (isCurrent ? '当前站' : '下一站')} · ${poi.name}`,
-        snippet: poi.timeSlot || poi.type || '',
-        clickable: false,
-        zIndex: isCurrent ? 72 : 70,
-      });
-      this.tourMarkerIds.push(markerId);
-      this.markerPositions[markerId] = { latitude: poi.lat, longitude: poi.lng };
-    }
-  }
-
-  private async routeToCurrentTourPoi(): Promise<void> {
-    const poi: TourExecutionPoi | null = this.currentTourPoi();
-    if (!poi) return;
-    this.tourIsRouting = true;
-    this.showNavigation = true;
-    this.navOriginLat = this.mapCenter.latitude;
-    this.navOriginLng = this.mapCenter.longitude;
-    this.navOriginName = '当前位置';
-    this.navRoute = null;
-    this.navSearchResults = [];
-    await this.navSelectDestination({
-      name: poi.name,
-      type: poi.type,
-      latitude: poi.lat,
-      longitude: poi.lng,
-      address: poi.note,
-      distance: 0,
-      tel: '',
-    });
-    this.tourActionMessage = this.navRoute ? `已规划到 ${poi.name} 的路线` : '路线计算失败，请检查网络或切换出行方式后重试';
-    this.tourIsRouting = false;
-  }
-
-  private async checkInCurrentTourPoi(): Promise<void> {
-    if (!this.tourSession) return;
-    const poi: TourExecutionPoi | null = this.currentTourPoi();
-    if (!poi) return;
-    const now: number = Date.now();
-    const fp: Footprint = new Footprint();
-    fp.latitude = poi.lat;
-    fp.longitude = poi.lng;
-    fp.accuracy = 0;
-    fp.timestamp = now;
-    fp.poiName = poi.name;
-    fp.poiType = poi.type;
-    fp.activityTag = poi.type || 'travel';
-    fp.source = 'tour';
-    fp.dayKey = getDayKey(now);
-    await this.dao.insertFootprint(fp);
-    this.footprintCount++;
-    this.tourSession = TourExecutionService.markCurrentChecked(this.tourSession);
-    await TourExecutionService.save(this.tourSession);
-    this.tourActionMessage = `已打卡 ${poi.name}`;
-    await this.loadAllData();
-    this.drawTourMarkers();
-  }
-
-  private async skipCurrentTourPoi(): Promise<void> {
-    if (!this.tourSession) return;
-    const poi: TourExecutionPoi | null = this.currentTourPoi();
-    if (!poi) return;
-    this.tourSession = TourExecutionService.markCurrentChecked(this.tourSession);
-    await TourExecutionService.save(this.tourSession);
-    this.tourActionMessage = `已切换到下一站，未写入 ${poi.name} 的打卡足迹`;
-    this.drawTourMarkers();
-  }
-
-  private async finishTourExecution(): Promise<void> {
-    await TourExecutionService.clear();
-    this.tourSession = null;
-    this.tourActionMessage = '';
-    this.tourExecutionFingerprint = 'none';
-    this.clearTourMarkers();
-    this.clearNavigationRoute();
-  }
-
-  private async openTourRecommendations(): Promise<void> {
-    try {
-      await AgentScheduler.getInstance().requestRefresh();
-      RecRefreshSignal.fire();
-    } catch (_e) { /* ignore */ }
-    router.pushUrl({
-      url: 'pages/RecommendPage',
-      params: {
-        tourExecution: '1',
-        city: this.tourSession ? this.tourSession.planCity : '',
-      }
-    });
   }
 
   // ─── 导航功能 ───
@@ -1975,88 +1764,6 @@ export struct MapPage {
             .onClick(() => { this.toggleNavigation(); })
           }
           .width('100%').padding({ right: 12 }).margin({ top: 232 })
-
-          // 导游执行浮层：从导游页开始行程后，在主地图完成导航/打卡/推荐闭环
-          if (this.tourSession && this.tourSession.active) {
-            Column() {
-              Row() {
-                Text('🧭 导游执行').fontSize(13).fontWeight(FontWeight.Bold)
-                  .fontColor(getTheme(this.themeMode).textPrimary)
-                Blank()
-                Text(this.tourProgressText()).fontSize(11).fontColor(getTheme(this.themeMode).success)
-              }.width('100%').margin({ bottom: 4 })
-
-              Text(`${this.tourSession.dayLabel} · ${this.tourPoiNameText()}`)
-                .fontSize(15).fontWeight(FontWeight.Bold)
-                .fontColor(getTheme(this.themeMode).textPrimary)
-                .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-              Text(this.tourPoiMetaText())
-                .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary)
-                .margin({ top: 2 })
-                .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-              Text(this.tourDistanceText())
-                .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary)
-                .margin({ top: 2, bottom: 6 })
-
-              if (this.tourActionMessage.length > 0) {
-                Text(this.tourActionMessage)
-                  .fontSize(10)
-                  .fontColor(getTheme(this.themeMode).primary)
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .margin({ bottom: 6 })
-              }
-
-              if (this.hasCurrentTourPoi()) {
-                Row() {
-                  Button(this.tourIsRouting ? '规划中' : '导航')
-                    .fontSize(11).height(30).layoutWeight(1)
-                    .backgroundColor('#10B981').fontColor('#FFFFFF').borderRadius(15)
-                    .onClick(() => { this.routeToCurrentTourPoi(); })
-                  Button('打卡')
-                    .fontSize(11).height(30).layoutWeight(1)
-                    .backgroundColor('#3B82F6').fontColor('#FFFFFF').borderRadius(15)
-                    .margin({ left: 6 })
-                    .onClick(() => { this.checkInCurrentTourPoi(); })
-                  Button('下一站')
-                    .fontSize(11).height(30).layoutWeight(1)
-                    .backgroundColor(getTheme(this.themeMode).surfaceSecondary)
-                    .fontColor(getTheme(this.themeMode).textPrimary)
-                    .borderRadius(15)
-                    .margin({ left: 6 })
-                    .onClick(() => { this.skipCurrentTourPoi(); })
-                }.width('100%')
-              } else {
-                Text('当天站点已全部完成，可继续查看附近推荐或结束执行')
-                  .fontSize(11)
-                  .fontColor(getTheme(this.themeMode).success)
-                  .margin({ bottom: 2 })
-              }
-
-              Row() {
-                Button('随路推荐')
-                  .fontSize(11).height(30).layoutWeight(1)
-                  .backgroundColor('#F59E0B').fontColor('#FFFFFF').borderRadius(15)
-                  .onClick(() => { this.openTourRecommendations(); })
-                Button('结束')
-                  .fontSize(11).height(30).layoutWeight(1)
-                  .backgroundColor(getTheme(this.themeMode).surfaceSecondary)
-                  .fontColor(getTheme(this.themeMode).textSecondary)
-                  .borderRadius(15)
-                  .margin({ left: 6 })
-                  .onClick(() => { this.finishTourExecution(); })
-              }
-              .width('100%')
-              .margin({ top: 6 })
-            }
-            .width('76%')
-            .padding(12)
-            .backgroundColor(getTheme(this.themeMode).surface)
-            .borderRadius(14)
-            .shadow({ radius: 8, color: '#30000000', offsetY: 2 })
-            .position({ x: '4%', y: 124 })
-            .zIndex(88)
-          }
 
           // 刷新推荐浮钮（右下角）
           Row() {

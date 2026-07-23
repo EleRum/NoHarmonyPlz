@@ -46,115 +46,6 @@ export class AmapSearchService {
     });
   }
 
-  private normalizeCityName(city: string): string {
-    return (city || '').trim().replace(/特别行政区|行政区|市$/g, '');
-  }
-
-  private getSpecialCityCenter(city: string): LatLng | null {
-    const c: string = this.normalizeCityName(city);
-    const centers: Record<string, LatLng> = {
-      '香港': { latitude: 22.3193, longitude: 114.1694 },
-      'Hong Kong': { latitude: 22.3193, longitude: 114.1694 },
-      'HongKong': { latitude: 22.3193, longitude: 114.1694 },
-      '澳门': { latitude: 22.1987, longitude: 113.5439 },
-      'Macau': { latitude: 22.1987, longitude: 113.5439 },
-      '台北': { latitude: 25.0330, longitude: 121.5654 },
-      '台湾': { latitude: 25.0330, longitude: 121.5654 },
-      '东京': { latitude: 35.6762, longitude: 139.6503 },
-      '大阪': { latitude: 34.6937, longitude: 135.5023 },
-      '首尔': { latitude: 37.5665, longitude: 126.9780 },
-      '新加坡': { latitude: 1.3521, longitude: 103.8198 },
-      '曼谷': { latitude: 13.7563, longitude: 100.5018 },
-      '巴黎': { latitude: 48.8566, longitude: 2.3522 },
-      '伦敦': { latitude: 51.5074, longitude: -0.1278 },
-      '纽约': { latitude: 40.7128, longitude: -74.0060 },
-    };
-    return centers[c] || null;
-  }
-
-  getCoverageNotice(city: string): string {
-    const c: string = this.normalizeCityName(city);
-    if (c === '香港' || c === 'Hong Kong' || c === 'HongKong' || c === '澳门' || c === 'Macau' || c === '台北' || c === '台湾') {
-      return '港澳台 POI/路线已使用兼容搜索；如果搜索为空，建议换中文地名或手动选择地图点。';
-    }
-    const overseas: string[] = ['东京', '大阪', '首尔', '新加坡', '曼谷', '巴黎', '伦敦', '纽约'];
-    if (overseas.indexOf(c) >= 0) {
-      return '当前地图服务对境外 POI/路线覆盖有限：可定位城市中心，但景点搜索和路线可能需要用户手动补充地点。';
-    }
-    return '';
-  }
-
-  private cityFormatCandidates(city: string): string[] {
-    const normalized: string = this.normalizeCityName(city);
-    const formats: string[] = [];
-    const add = (v: string): void => {
-      if (v && v.length > 0 && formats.indexOf(v) < 0) formats.push(v);
-    };
-    add(city);
-    add(normalized);
-    if (normalized === '香港' || normalized === 'Hong Kong' || normalized === 'HongKong') {
-      add('香港'); add('香港特别行政区'); add('Hong Kong'); add('HongKong');
-    } else if (normalized === '澳门') {
-      add('澳门特别行政区'); add('Macau');
-    } else if (normalized === '台北' || normalized === '台湾') {
-      add('台北市'); add('台湾');
-    } else if (normalized.length > 0 && !normalized.endsWith('市')) {
-      add(normalized + '市');
-    }
-    return formats;
-  }
-
-  private parsePoiResult(poi: Record<string, Object>): PoiResult | null {
-    const locStr: string = (poi['location'] as string) ?? '';
-    const locParts: string[] = locStr.split(',');
-    if (locParts.length !== 2) return null;
-    const lng: number = parseFloat(locParts[0]);
-    const lat: number = parseFloat(locParts[1]);
-    if (!(lat !== 0) || !(lng !== 0) || isNaN(lat) || isNaN(lng)) return null;
-    const distStr: string = (poi['distance'] as string) ?? '0';
-    const distNum: number = parseInt(distStr);
-    return {
-      name: (poi['name'] as string) ?? '',
-      type: (poi['type'] as string) ?? '',
-      latitude: lat,
-      longitude: lng,
-      address: (poi['address'] as string) ?? '',
-      distance: isNaN(distNum) ? 0 : distNum,
-      tel: (poi['tel'] as string) ?? '',
-      id: (poi['id'] as string) ?? '',
-      cost: this.extractCost(poi),
-    } as PoiResult;
-  }
-
-  private sortAndDedupPois(results: PoiResult[], center?: LatLng): PoiResult[] {
-    const seen: Set<string> = new Set();
-    const filtered: PoiResult[] = [];
-    for (const p of results) {
-      if (!p.name || p.name.length === 0) continue;
-      if (!(p.latitude !== 0) || !(p.longitude !== 0)) continue;
-      const key: string = `${p.name}|${p.latitude.toFixed(5)}|${p.longitude.toFixed(5)}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      if (center) {
-        const dLat: number = p.latitude - center.latitude;
-        const dLng: number = p.longitude - center.longitude;
-        const dist: number = Math.sqrt(dLat * dLat + dLng * dLng) * 111320;
-        if (!p.distance || p.distance <= 0) p.distance = Math.round(dist);
-      }
-      filtered.push(p);
-    }
-    if (center) {
-      filtered.sort((a: PoiResult, b: PoiResult): number => {
-        const da: number = a.distance || 0;
-        const db: number = b.distance || 0;
-        if (da === 0 && db > 0) return 1;
-        if (db === 0 && da > 0) return -1;
-        return da - db;
-      });
-    }
-    return filtered;
-  }
-
   /**
    * 周边搜索（Promise 封装，通过 JS Bridge）
    */
@@ -243,12 +134,25 @@ export class AmapSearchService {
           const poisRaw: Object[] = json['pois'] as Object[];
           const results: PoiResult[] = [];
           for (let i: number = 0; i < poisRaw.length; i++) {
-            const parsed: PoiResult | null = this.parsePoiResult(poisRaw[i] as Record<string, Object>);
-            if (parsed) results.push(parsed);
+            const poi = poisRaw[i] as Record<string, Object>;
+            const locStr: string = (poi['location'] as string) ?? '';
+            const locParts: string[] = locStr.split(',');
+            const distStr: string = (poi['distance'] as string) ?? '0';
+            const distNum: number = parseInt(distStr);
+            results.push({
+              name: (poi['name'] as string) ?? '',
+              type: (poi['type'] as string) ?? '',
+              latitude: locParts.length === 2 ? parseFloat(locParts[1]) : 0,
+              longitude: locParts.length === 2 ? parseFloat(locParts[0]) : 0,
+              address: (poi['address'] as string) ?? '',
+              distance: isNaN(distNum) ? 0 : distNum,
+              tel: (poi['tel'] as string) ?? '',
+              id: (poi['id'] as string) ?? '',
+              cost: this.extractCost(poi),
+            } as PoiResult);
           }
-          const sorted: PoiResult[] = this.sortAndDedupPois(results, { latitude: latitude, longitude: longitude });
-          Logger.info(TAG, 'REST search OK: %{public}d results', sorted.length);
-          return sorted;
+          Logger.info(TAG, 'REST search OK: %{public}d results', results.length);
+          return results;
         }
       }
       Logger.warn(TAG, 'REST search failed: responseCode=%{public}d', resp.responseCode);
@@ -541,42 +445,30 @@ export class AmapSearchService {
    * 城市名转坐标（REST API）
    */
   async geocodeCity(cityName: string): Promise<LatLng | null> {
-    const cityFormats: string[] = this.cityFormatCandidates(cityName);
-    for (const cityFmt of cityFormats) {
-      const url: string =
-        `https://restapi.amap.com/v3/geocode/geo?key=${AMAP_KEY}` +
-        `&address=${encodeURIComponent(cityFmt)}`;
+    const url: string =
+      `https://restapi.amap.com/v3/geocode/geo?key=${AMAP_KEY}` +
+      `&address=${encodeURIComponent(cityName)}`;
 
-      try {
-        const bridge: PlatformBridge = PlatformBridge.getInstance();
-        const resp = await bridge.network.request(url, { method: 'GET' });
-        if (resp.responseCode === 200 && resp.result) {
-          const json = JSON.parse(resp.result) as Record<string, Object>;
-          const statusStr: string = json['status'] as string ?? '0';
-          if (statusStr === '1') {
-            const geocodes: Object[] = (json['geocodes'] as Object[]) ?? [];
-            if (geocodes.length > 0) {
-              const geo = geocodes[0] as Record<string, Object>;
-              const locStr: string = (geo['location'] as string) ?? '';
-              const parts: string[] = locStr.split(',');
-              if (parts.length === 2) {
-                const lat: number = parseFloat(parts[1]);
-                const lng: number = parseFloat(parts[0]);
-                if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
-                  return { latitude: lat, longitude: lng } as LatLng;
-                }
-              }
+    try {
+      const bridge: PlatformBridge = PlatformBridge.getInstance();
+      const resp = await bridge.network.request(url, { method: 'GET' });
+      if (resp.responseCode === 200 && resp.result) {
+        const json = JSON.parse(resp.result) as Record<string, Object>;
+        const statusStr: string = json['status'] as string ?? '0';
+        if (statusStr === '1') {
+          const geocodes: Object[] = (json['geocodes'] as Object[]) ?? [];
+          if (geocodes.length > 0) {
+            const geo = geocodes[0] as Record<string, Object>;
+            const locStr: string = (geo['location'] as string) ?? '';
+            const parts: string[] = locStr.split(',');
+            if (parts.length === 2) {
+              return { latitude: parseFloat(parts[1]), longitude: parseFloat(parts[0]) } as LatLng;
             }
           }
         }
-      } catch (e) {
-        Logger.warn(TAG, 'REST geocode city error');
       }
-    }
-    const fallback: LatLng | null = this.getSpecialCityCenter(cityName);
-    if (fallback) {
-      Logger.warn(TAG, 'Use static city center fallback for %{public}s', cityName);
-      return fallback;
+    } catch (e) {
+      Logger.warn(TAG, 'REST geocode city error');
     }
     return null;
   }
@@ -611,8 +503,7 @@ export class AmapSearchService {
     } catch (e) {
       Logger.warn(TAG, 'REST geocode address error');
     }
-    const fallback: LatLng | null = this.getSpecialCityCenter(address) || (city ? this.getSpecialCityCenter(city) : null);
-    return fallback;
+    return null;
   }
 
   /**
@@ -634,9 +525,10 @@ export class AmapSearchService {
   /**
    * 全文搜索 POI — 全城搜索，按相关性排序，不局限在某个坐标周围
    */
-  async searchPoiByText(keywords: string, city: string, centerLat?: number, centerLng?: number): Promise<PoiResult[]> {
-    const cityFormats: string[] = this.cityFormatCandidates(city);
-    const center: LatLng | undefined = (centerLat !== undefined && centerLng !== undefined && centerLat !== 0 && centerLng !== 0) ? { latitude: centerLat, longitude: centerLng } : undefined;
+  async searchPoiByText(keywords: string, city: string): Promise<PoiResult[]> {
+    // 尝试多种城市名格式
+    const cityFormats: string[] = [city, city + '市'];
+    if (city.endsWith('市')) cityFormats.unshift(city.replace('市', ''));
 
     for (const cityFmt of cityFormats) {
       const url: string =
@@ -652,32 +544,28 @@ export class AmapSearchService {
             if (poisRaw.length > 0) {
               const results: PoiResult[] = [];
               for (let i: number = 0; i < poisRaw.length; i++) {
-                const parsed: PoiResult | null = this.parsePoiResult(poisRaw[i] as Record<string, Object>);
-                if (parsed) results.push(parsed);
+                const poi = poisRaw[i] as Record<string, Object>;
+                const locStr: string = (poi['location'] as string) ?? '';
+                const locParts: string[] = locStr.split(',');
+                results.push({
+                  name: (poi['name'] as string) ?? '',
+                  type: (poi['type'] as string) ?? '',
+                  latitude: locParts.length === 2 ? parseFloat(locParts[1]) : 0,
+                  longitude: locParts.length === 2 ? parseFloat(locParts[0]) : 0,
+                  address: (poi['address'] as string) ?? '',
+                  distance: 0,
+                  tel: (poi['tel'] as string) ?? '',
+                  id: (poi['id'] as string) ?? '',
+                  cost: this.extractCost(poi),
+                } as PoiResult);
               }
-              const sorted: PoiResult[] = this.sortAndDedupPois(results, center);
-              if (sorted.length > 0) {
-                Logger.info(TAG, 'Text search "%{public}s" in "%{public}s": %{public}d results', keywords, cityFmt, sorted.length);
-                return sorted;
-              }
+              Logger.info(TAG, 'Text search "%{public}s" in "%{public}s": %{public}d results', keywords, cityFmt, results.length);
+              return results;
             }
           }
         }
       } catch (e) {
         Logger.warn(TAG, 'Text search failed for "%{public}s": %{public}s', cityFmt, JSON.stringify(e));
-      }
-    }
-
-    let fallbackCenter: LatLng | undefined = center;
-    if (!fallbackCenter) {
-      const special: LatLng | null = this.getSpecialCityCenter(city);
-      if (special) fallbackCenter = special;
-    }
-    if (fallbackCenter) {
-      const around: PoiResult[] = await this.nearbySearchRest(keywords, fallbackCenter.latitude, fallbackCenter.longitude, 20000);
-      if (around.length > 0) {
-        Logger.info(TAG, 'Text search fallback around center "%{public}s": %{public}d results', keywords, around.length);
-        return around;
       }
     }
     Logger.warn(TAG, 'Text search returned no results for "%{public}s"', keywords);

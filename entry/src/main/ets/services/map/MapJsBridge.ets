@@ -50,15 +50,11 @@ export class MapJsBridge implements IMapService {
   setController(ctl: webview.WebviewController): void {
     this.controller = ctl;
     // 注册原生桥接对象 → JS 端通过 window.arkTsCallback.onMessage(msg) 调用
-    try {
-      ctl.registerJavaScriptProxy({
-        onMessage: (message: string): void => {
-          this.handleJsMessage(message);
-        }
-      }, 'arkTsCallback', ['onMessage']);
-    } catch (e) {
-      Logger.warn(TAG, 'registerJavaScriptProxy failed: %{public}s', JSON.stringify(e));
-    }
+    ctl.registerJavaScriptProxy({
+      onMessage: (message: string): void => {
+        this.handleJsMessage(message);
+      }
+    }, 'arkTsCallback', ['onMessage']);
   }
 
   initialize(config: MapInitConfig): void {

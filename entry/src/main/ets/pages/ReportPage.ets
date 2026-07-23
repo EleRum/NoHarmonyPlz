@@ -4,6 +4,7 @@
  */
 import { Logger } from '../common/Logger';
 import { getTheme } from '../common/Theme';
+import { Footprint } from '../model/Footprint';
 import { ActivitySegment } from '../model/ActivitySegment';
 import { Dao } from '../database/Dao';
 import { ACTIVITY_LABELS } from '../common/Constants';
@@ -104,64 +105,6 @@ export struct ReportContent {
     const m: string = parseInt(dayKey.substring(4, 6)).toString();
     const d: string = parseInt(dayKey.substring(6, 8)).toString();
     return `${m}/${d}`;
-  }
-
-  private topWeekActivity(): string {
-    const labels: string[] = [];
-    const counts: number[] = [];
-    for (const day of this.weekStats) {
-      for (const seg of day.segments) {
-        const label: string = ACTIVITY_LABELS[seg.activityType] || seg.activityType || '活动';
-        const idx: number = labels.indexOf(label);
-        if (idx >= 0) counts[idx] = counts[idx] + 1;
-        else { labels.push(label); counts.push(1); }
-      }
-    }
-    let bestIdx: number = -1;
-    for (let i: number = 0; i < counts.length; i++) {
-      if (bestIdx < 0 || counts[i] > counts[bestIdx]) bestIdx = i;
-    }
-    return bestIdx >= 0 ? labels[bestIdx] : '暂无';
-  }
-
-  private topWeekPlace(): string {
-    const labels: string[] = [];
-    const counts: number[] = [];
-    for (const day of this.weekStats) {
-      for (const seg of day.segments) {
-        const label: string = seg.poiName || '';
-        if (label.length === 0) continue;
-        const idx: number = labels.indexOf(label);
-        if (idx >= 0) counts[idx] = counts[idx] + 1;
-        else { labels.push(label); counts.push(1); }
-      }
-    }
-    let bestIdx: number = -1;
-    for (let i: number = 0; i < counts.length; i++) {
-      if (bestIdx < 0 || counts[i] > counts[bestIdx]) bestIdx = i;
-    }
-    return bestIdx >= 0 ? labels[bestIdx] : '暂无';
-  }
-
-  buildAiSummaryText(): string {
-    if (this.totalFootprints <= 0 && this.totalSegments <= 0) {
-      return '还没有足够的出行数据。开启后台定位后，系统会根据足迹点、活动片段和地点停留情况生成摘要。';
-    }
-    const today: DailyStats | null = this.todayStats;
-    const activeDays: number = this.weekStats.length;
-    const topActivity: string = this.topWeekActivity();
-    const topPlace: string = this.topWeekPlace();
-    let todayText: string = '今天暂无新的活动片段。';
-    if (today && (today.footprintCount > 0 || today.segments.length > 0)) {
-      todayText = `今天记录 ${today.footprintCount} 个足迹点，主要活动是${today.topActivity}，主要地点是${today.topPlace}。`;
-    }
-    let weekText: string = '近 7 天暂无连续出行数据。';
-    if (activeDays > 0) {
-      weekText = `近 7 天共有 ${activeDays} 个活跃日，累计 ${this.totalSegments} 段活动，最常见活动是${topActivity}。`;
-    }
-    const placeText: string = topPlace !== '暂无' ? ` 高频地点集中在${topPlace}附近。` : ' 高频地点还不明显。';
-    const suggestText: string = activeDays >= 5 ? '建议继续保持记录节奏，后续可以生成更稳定的周报趋势。' : '建议连续记录几天，让 Agent 更准确识别通勤、休闲和旅行节奏。';
-    return weekText + placeText + todayText + suggestText;
   }
 
   build() {
@@ -270,13 +213,15 @@ export struct ReportContent {
             .borderRadius(12).margin({ top: 4, bottom: 8 })
             .shadow({ radius: 4, color: '#10000000', offsetY: 2 })
 
-            // ── AI 摘要 ──
+            // ── AI 摘要占位 ──
             Column() {
               Row() {
                 Text('🤖 AI 摘要').fontSize(16).fontWeight(FontWeight.Bold).fontColor(getTheme(this.themeMode).textPrimary)
               }.width('100%').margin({ bottom: 10 })
 
-              Text(this.buildAiSummaryText())
+              Text(this.totalFootprints > 0
+                ? '根据您的出行数据，您的生活规律正在被 Agent 学习中。随着数据积累，这里将自动生成每周行为总结和出行建议。'
+                : '还没有足够的出行数据，开启后台定位后，系统将在每晚自动生成行程摘要。')
                 .fontSize(13).fontColor(getTheme(this.themeMode).textSecondary).lineHeight(20)
             }
             .width('90%').padding(16).backgroundColor(getTheme(this.themeMode).surface)

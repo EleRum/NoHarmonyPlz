@@ -4,7 +4,6 @@
 import { Logger } from '../common/Logger';
 import router from '@ohos.router';
 import { ClaudeService } from '../services/ClaudeService';
-import { PhotoService } from '../services/PhotoService';
 import { Dao } from '../database/Dao';
 import { UserBasicInfo } from '../model/UserBasicInfo';
 import { getTheme } from '../common/Theme';
@@ -19,12 +18,9 @@ export struct SettingsContent {
   @Prop @Watch('onProfileRefresh') profileRefreshKey: number = 0;
   @State profileName: string = '';
   @State profileSummary: string = '';
-  @State isPhotoScanning: boolean = false;
-  @State photoScanStatus: string = '扫描带位置照片，生成照片足迹';
 
   private dao: Dao = Dao.getInstance();
   private claude: ClaudeService = new ClaudeService();
-  private photoService: PhotoService = PhotoService.getInstance();
 
   aboutToAppear(): void {
     Logger.info(TAG, 'SettingsPage aboutToAppear');
@@ -49,21 +45,6 @@ export struct SettingsContent {
 
   onProfileRefresh(): void { this.loadProfile(); }
 
-  async scanPhotosNow(): Promise<void> {
-    if (this.isPhotoScanning) return;
-    this.isPhotoScanning = true;
-    this.photoScanStatus = '正在扫描相册中的 GPS 照片...';
-    try {
-      const count: number = await this.photoService.scanPhotos();
-      this.photoScanStatus = count > 0 ? `已新增 ${count} 个照片足迹` : '没有发现新的带位置照片';
-    } catch (e) {
-      Logger.warn(TAG, 'Manual photo scan failed');
-      this.photoScanStatus = '照片扫描失败，请检查相册权限';
-    } finally {
-      this.isPhotoScanning = false;
-    }
-  }
-
   navTo(section: string): void {
     router.pushUrl({ url: 'pages/SettingsDetailPage', params: { section: section } })
       .catch((err: Error) => { Logger.error(TAG, 'navTo failed: %{public}s', err.message); });
@@ -76,8 +57,6 @@ export struct SettingsContent {
           this.OptionBar('🤖', 'AI 设置', '配置大模型 API Key', () => { this.navTo('ai'); })
           Column() {}.height(8)
           this.OptionBar('🔔', '推荐设置', '后台刷新、地图标记', () => { this.navTo('rec'); })
-          Column() {}.height(8)
-          this.OptionBar(this.isPhotoScanning ? '⏳' : '📷', '照片足迹', this.photoScanStatus, () => { this.scanPhotosNow(); })
           Column() {}.height(8)
           this.OptionBar('🔒', '隐私与数据', '本地存储、权限、清除数据', () => { this.navTo('privacy'); })
           Column() {}.height(8)
