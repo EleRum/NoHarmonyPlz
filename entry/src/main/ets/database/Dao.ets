@@ -601,6 +601,34 @@ export class Dao {
   }
 
   // ════════════════════════════════════════════════════════
+  //  Privacy / local data
+  // ════════════════════════════════════════════════════════
+
+  async clearAllLocalData(): Promise<number> {
+    const db = this.getDb();
+    if (!db) return 0;
+
+    const tables: string[] = [
+      TABLE_RECOMMENDATION,
+      TABLE_SEGMENT_CALIBRATION,
+      TABLE_ACTIVITY_SEGMENT,
+      TABLE_FOOTPRINT,
+      TABLE_USER_PROFILE,
+      TABLE_USER_BASIC_INFO
+    ];
+    let total: number = 0;
+    for (const table of tables) {
+      try {
+        total += await db.delete(table, '1 = 1');
+      } catch (err) {
+        Logger.error(TAG, 'clearAllLocalData failed for %{public}s: %{public}s', table, JSON.stringify(err));
+      }
+    }
+    Logger.info(TAG, 'clearAllLocalData deleted=%{public}d', total);
+    return total;
+  }
+
+  // ════════════════════════════════════════════════════════
   //  Recommendation CRUD
   // ════════════════════════════════════════════════════════
 

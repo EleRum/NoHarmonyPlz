@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 设置页面 — 设置入口（三个子页面通过路由跳转）
  */
 import { Logger } from '../common/Logger';
@@ -57,6 +57,8 @@ export struct SettingsContent {
           this.OptionBar('🤖', 'AI 设置', '配置大模型 API Key', () => { this.navTo('ai'); })
           Column() {}.height(8)
           this.OptionBar('🔔', '推荐设置', '后台刷新、地图标记', () => { this.navTo('rec'); })
+          Column() {}.height(8)
+          this.OptionBar('🔒', '隐私与数据', '本地存储、权限、清除数据', () => { this.navTo('privacy'); })
           Column() {}.height(8)
           this.OptionBar('📱', '关于', '足迹地图 v2.0.3', () => { this.navTo('about'); })
         }

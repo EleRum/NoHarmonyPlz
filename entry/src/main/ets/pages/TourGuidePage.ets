@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 导游页 — 全屏地图 + AI 导游规划
  * AI 一步步收集信息、搜酒店、规划每日行程、生成路线图
  */
@@ -337,6 +337,15 @@ export struct TourGuideContent {
   /** 批量执行工具调用并继续对话
    *  geocode 完成后立即移动地图（不等其余工具），其余工具完成后追加标记
    *  第二阶段：询问 AI 下一步 → 链式调用下一批（只读工具最多2轮，防止AI跑飞） */
+  private shouldShowToolResult(text: string, toolCalls: ToolCall[]): boolean {
+    if (!text || text.trim().length === 0) return false;
+    const infoActions: string[] = ['estimate_costs', 'set_budget'];
+    if (toolCalls.some(tc => infoActions.indexOf(tc.action) >= 0)) return true;
+    return text.includes('⚠️') || text.includes('失败') || text.includes('未找到') ||
+      text.includes('异常') || text.includes('暂未查到') || text.includes('超时') ||
+      text.includes('需要先') || text.includes('不可用') || text.includes('查不到');
+  }
+
   private chainDepth: number = 0;
   async autoExecuteTools(toolCalls: ToolCall[]): Promise<void> {
     if (toolCalls.length === 0) return;
@@ -410,9 +419,8 @@ export struct TourGuideContent {
             this.chatMessages = this.chatMessages.slice(0, -1);
           }
         }
-        // 对于信息性工具，显示工具执行结果（预算概览等）
-        const infoActions: string[] = ['estimate_costs', 'set_budget'];
-        if (toolCalls.some(tc => infoActions.indexOf(tc.action) >= 0) && resp.text && resp.text.length > 0) {
+        // 对于信息性工具和失败兜底，直接展示工具层结果，避免空返回被包装成成功。
+        if (this.shouldShowToolResult(resp.text, toolCalls)) {
           this.chatMessages.push({ role: 'ai', content: resp.text });
           this.chatScroller.scrollEdge(Edge.Bottom);
         }

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Footprint Map Page
  * Data-first: show footprints on open, switch when map ready
  * Uses IMapService/MapJsBridge for cross-platform map operations
@@ -1638,16 +1638,20 @@ export struct MapPage {
                     Column() {
                       Text(route.dayKey.slice(4, 6) + '/' + route.dayKey.slice(6, 8))
                         .fontSize(12).fontColor(idx === this.selectedDayIndex ? '#FFFFFF' : '#AAA')
+                        .maxLines(1)
                       Text(route.dayKey.slice(0, 4))
                         .fontSize(9).fontColor(idx === this.selectedDayIndex ? '#FFFFFF' : '#CCC')
+                        .maxLines(1)
                       Row() {}.width(24).height(2)
                         .backgroundColor(idx === this.selectedDayIndex ? '#FFFFFF' : Color.Transparent)
                         .borderRadius(1).margin({ top: 2 })
                     }
-                    .padding({ top: 6, bottom: 6, left: 10, right: 10 })
+                    .width(56).height(34)
+                    .justifyContent(FlexAlign.Center)
                     .backgroundColor(idx === this.selectedDayIndex ? '#3B82F6' : Color.Transparent)
-                    .borderRadius(16)
+                    .borderRadius(17)
                     .flexShrink(0)
+                    .clip(true)
                     .onClick(() => {
                       this.selectedDayIndex = idx;
                       const tKey: string = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -1666,9 +1670,11 @@ export struct MapPage {
                     })
                   })
                 }
+                .padding({ left: 6, right: 6 })
               }
               .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
-              .width('100%').height(36)
+              .width('100%').height(42)
+              .clip(true)
 
               if (this.dayRoutes.length > 0) {
                 Row() {

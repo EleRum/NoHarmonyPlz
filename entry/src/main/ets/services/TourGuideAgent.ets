@@ -10,6 +10,7 @@ import { PoiResult, LatLng, NavRoute, DirectionMode } from './map/MapTypes';
 import { TourPlan, TourDay, TourPoiItem, InterCityTransport, createEmptyPlan, getBudgetBreakdown, getTransportEmoji, getTransportLabel, isMarkerPoi, formatClockTime, DEFAULT_DAY_START_MIN, DEFAULT_DAY_END_MIN, MEAL_WINDOWS, MealWindow } from '../model/TourPlan';
 import { Logger } from '../common/Logger';
 import { haversineDistance } from '../common/LocationUtils';
+import { AMAP_API_KEY } from '../common/Constants';
 
 const TAG = 'TourGuideAgent';
 
@@ -62,6 +63,11 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
 ## 规则（必须遵守！）
 - **最重要的规则：每次回复末尾都必须带 ---JSON--- 工具调用！**
   * 只有纯粹闲聊（打招呼、道谢）才不加
+- **事实来源与失败处理**
+  * 城市坐标、POI、天气、车次、时间、价格只能来自工具结果或当前行程备忘录，禁止凭空编造
+  * 工具返回"失败/未找到/超时/异常/暂未查到"时，必须明确告诉用户失败原因，并给出换关键词、改日期、手动选择等下一步
+  * 不确定的信息要标注"未确认"或"参考"，不能包装成已经查到
+  * 交通搜索无结果时禁止编造车次、时间、票价
 - **严禁擅自决定！你是建议者，用户是决策者！**
   * set_budget 只能由用户说出金额后调用，禁止自己编预算！
   * search_hotels 只能由用户说"帮我找酒店"后调用，禁止主动搜！
@@ -130,6 +136,7 @@ const SYSTEM_PROMPT: string = `你是小途，资深旅游规划师。今天是$
 export interface ToolCall {
   action: string;
   quickReplies?: string[];
+  msg?: string;
   keywords?: string;
   city?: string;
   hotel?: string;
@@ -747,6 +754,10 @@ export class TourGuideAgent {
     let transportOptions: import('../services/map/AmapSearchService').IntercityTransportOption[] | undefined = undefined;
 
     switch (action) {
+      case 'chat': {
+        resultText = params['msg'] ?? '好的。';
+        break;
+      }
       case 'geocode_city': {
         const city: string = params['city'] ?? '';
         if (this.plan.city === city && this.plan.cityLat !== 0) {
@@ -1083,10 +1094,6 @@ export class TourGuideAgent {
         const dsLabel: string = sdbDay.dayStartMin ? formatClockTime(sdbDay.dayStartMin) : '默认';
         const deLabel: string = sdbDay.dayEndMin ? formatClockTime(sdbDay.dayEndMin) : '默认';
         resultText = `${sdbDay.label}时间已设为 ${dsLabel}-${deLabel}。`;
-        break;
-      }
-      case 'get_weather': {
-        resultText = `${params['city'] || this.plan.city}近日天气：晴转多云 20-28°C（参考）。`;
         break;
       }
       case 'set_days': {
@@ -1491,7 +1498,7 @@ export class TourGuideAgent {
         const wCity: string = params['city'] ?? this.plan.city;
         try {
           const bridge = (await import('../platform/PlatformBridge')).PlatformBridge.getInstance();
-          const weatherKey: string = 'fc2c6f05fd1c51af417ddb1aa4f0aec3';
+          const weatherKey: string = AMAP_API_KEY;
           const geoUrl: string = `https://restapi.amap.com/v3/config/district?key=${weatherKey}&keywords=${encodeURI(wCity)}&subdistrict=0`;
           const geoResp = await bridge.network.request(geoUrl, { method: 'GET', connectTimeout: 5000, readTimeout: 8000 });
           let adcode: string = '';
@@ -1568,7 +1575,7 @@ export class TourGuideAgent {
         break;
       }
       default:
-        resultText = `工具 ${action} 执行完毕。`;
+        resultText = `⚠️ 暂不支持工具 ${action}，请换成已支持的定位、搜索、交通、预算或行程工具。`;
     }
 
     // 兜底：任何工具都不应返回空白
@@ -1582,6 +1589,7 @@ export class TourGuideAgent {
   /** ToolCall 转为 params Record */
   toParams(tc: ToolCall): Record<string, string> {
     const p: Record<string, string> = {};
+    if (tc.msg) p['msg'] = tc.msg;
     if (tc.keywords) p['keywords'] = tc.keywords;
     if (tc.city) p['city'] = tc.city;
     if (tc.hotel) p['hotel'] = tc.hotel;
@@ -1624,6 +1632,59 @@ export class TourGuideAgent {
           tc.action === 'set_budget' || tc.action === 'set_day_bounds') return true;
     }
     return false;
+  }
+
+  private validateToolCall(tc: ToolCall): string {
+    const action: string = tc.action || '';
+    const has = (v?: string): boolean => !!v && v.trim().length > 0;
+    switch (action) {
+      case 'chat':
+      case 'estimate_costs':
+        return '';
+      case 'geocode_city':
+        return has(tc.city) ? '' : 'geocode_city 缺少 city 参数。';
+      case 'search_hotels':
+        return (this.plan.cityLat !== 0 || has(tc.city) || has(tc.keywords) || has(tc.lat)) ? '' : 'search_hotels 需要先定位城市或提供区域关键词。';
+      case 'search_poi':
+        return this.plan.cityLat !== 0 ? '' : 'search_poi 需要先定位城市。';
+      case 'search_and_add':
+        return has(tc.keywords) ? '' : 'search_and_add 缺少 keywords 参数。';
+      case 'make_plan':
+        return this.plan.cityLat !== 0 ? '' : 'make_plan 需要先定位目的城市。';
+      case 'set_day_bounds':
+        return has(tc.dayIndex) && (has(tc.dayStartHour) || has(tc.dayEndHour)) ? '' : 'set_day_bounds 需要 dayIndex 和起止时间。';
+      case 'set_days':
+        return has(tc.days) || has(tc.amount) ? '' : 'set_days 缺少 days 参数。';
+      case 'set_budget':
+        return has(tc.amount) || has(tc.budget) ? '' : 'set_budget 缺少 amount 参数。';
+      case 'search_transport':
+        return has(tc.from) && has(tc.to) ? '' : 'search_transport 需要 from 和 to 参数。';
+      case 'set_transport':
+        return has(tc.type) && has(tc.from) && has(tc.to) ? '' : 'set_transport 需要 type、from 和 to 参数。';
+      case 'add_poi_to_day':
+        return has(tc.name) && has(tc.lat) && has(tc.lng) ? '' : 'add_poi_to_day 需要 name、lat、lng；请先用 search_poi 搜索。';
+      case 'remove_poi_from_day':
+        return has(tc.dayIndex) && has(tc.poiIndex) ? '' : 'remove_poi_from_day 需要 dayIndex 和 poiIndex。';
+      case 'get_weather':
+        return has(tc.city) || this.plan.city.length > 0 ? '' : 'get_weather 需要城市名。';
+      default:
+        return `未知工具 ${action}。`;
+    }
+  }
+
+  private isFailureResult(result: ToolResult): boolean {
+    const text: string = result.text || '';
+    return text.includes('⚠️') || text.includes('失败') || text.includes('未找到') ||
+      text.includes('异常') || text.includes('暂未查到') || text.includes('无效') ||
+      text.includes('需要先') || text.includes('不可用') || text.includes('超时') ||
+      text.includes('查不到');
+  }
+
+  private buildFailureGuidance(results: ToolResult[]): string {
+    const failed: ToolResult[] = results.filter((r: ToolResult) => this.isFailureResult(r));
+    if (failed.length === 0) return '';
+    const lines: string[] = failed.map((r: ToolResult) => `- ${r.action}: ${r.text.replace(/\n/g, ' ')}`);
+    return `⚠️ 有${failed.length}个工具没有成功，不能把这些信息当作已确认结果。\n${lines.join('\n')}\n建议：换关键词、补充城市/日期，或让用户手动选择后再继续。`;
   }
 
   /** 合并多个 ToolResult 为单个 AgentResponse */
@@ -1690,6 +1751,15 @@ export class TourGuideAgent {
 
     // 安全执行单个工具 — 异常不传播
     const safeExec = async (tc: ToolCall): Promise<ToolResult> => {
+      const validationMsg: string = this.validateToolCall(tc);
+      if (validationMsg.length > 0) {
+        Logger.warn(TAG, 'Tool %{public}s validation failed: %{public}s', tc.action, validationMsg);
+        return {
+          action: tc.action, params: this.toParams(tc),
+          text: `⚠️ 工具参数不完整：${validationMsg}`,
+          mapCenter: undefined, markers: undefined
+        };
+      }
       try {
         return await this.executeOneTool(tc.action, this.toParams(tc));
       } catch (e) {
@@ -1728,6 +1798,10 @@ export class TourGuideAgent {
 
     // 合并结果
     const resp: AgentResponse = this.mergeResults(results);
+    const failureGuidance: string = this.buildFailureGuidance(results);
+    if (failureGuidance.length > 0) {
+      resp.text = failureGuidance + '\n\n' + resp.text;
+    }
 
     // 后台静默重算（所有变更时更新，让 agent 上下文和 UI 看到最新预算）
     if (this.plan.totalBudget && this.wasPlanModified(toolCalls)) {
@@ -1752,6 +1826,14 @@ export class TourGuideAgent {
   /** 工具执行后向 AI 请求下一步（在 UI 更新之后调用，不阻塞地图刷新） */
   async askAiNextStep(results: ToolResult[]): Promise<AgentResponse> {
     const summary: string = results.map(r => `[${r.action}] ${r.text}`).join('\n');
+    const failureGuidance: string = this.buildFailureGuidance(results);
+    if (failureGuidance.length > 0 && results.length > 0 && results.every((r: ToolResult) => this.isFailureResult(r))) {
+      return {
+        text: failureGuidance + '\n\n我先不继续消耗模型调用。你可以换个关键词、补充城市/日期，或先手动选一个地点。',
+        toolCalls: [],
+        quickReplies: ['换个关键词', '补充日期', '手动选择地点']
+      };
+    }
     let planCtx: string = `当前计划：城市=${this.plan.city}(${this.plan.cityLat.toFixed(2)},${this.plan.cityLng.toFixed(2)}) 酒店=${this.plan.hotel?.name || '未选'} 天数=${this.plan.days}`;
     // 本地人模式标记：目的地 = 用户常住城市
     if (this.isLocalTrip()) {
@@ -1775,7 +1857,7 @@ export class TourGuideAgent {
     // 带上用户原始输入（确定性检测绕过AI时很重要，保留"三天"等上下文）
     const userCtx: string = this.lastUserInput ? `\n用户原始输入：${this.lastUserInput}\n` : '';
     if (this.lastUserInput) this.lastUserInput = ''; // 用完清掉
-    const followMsg: string = `工具执行结果：\n${summary}\n\n${planCtx}${userCtx}\n请基于此继续与用户对话。如果任务还没完成，继续下一步。如果搜索失败，换个关键词重试。`;
+    const followMsg: string = `工具执行结果：\n${summary}\n\n${failureGuidance ? failureGuidance + '\n\n' : ''}${planCtx}${userCtx}\n请基于此继续与用户对话。禁止把失败、空结果、超时当成成功；失败时要明确说明原因，并给用户一个可执行的下一步。`;
     const reply: ClaudeReply = await this.claude.chatConversation(followMsg, this.getSystemPrompt());
     const resultText2: string = reply.text || '收到，请继续。';
     let nextTools: ToolCall[] = this.parseToolCalls(resultText2);
@@ -2314,51 +2396,70 @@ export class TourGuideAgent {
     if (!jsonStr) return [];
 
     try {
+      jsonStr = jsonStr.replace(/,\s*([}\]])/g, '$1');
       const parsed: Object = JSON.parse(jsonStr) as Object;
       if (Array.isArray(parsed)) {
-        return (parsed as Record<string, string>[])
+        return (parsed as Record<string, Object>[])
           .map((obj) => this.objToToolCall(obj))
           .filter((tc) => tc !== null) as ToolCall[];
       } else {
-        const tc = this.objToToolCall(parsed as Record<string, string>);
+        const tc = this.objToToolCall(parsed as Record<string, Object>);
         return tc ? [tc] : [];
       }
-    } catch (_e) { /* ignore */ }
+    } catch (e) {
+      Logger.warn(TAG, 'parseToolCalls failed: %{public}s', JSON.stringify(e));
+    }
     return [];
   }
 
+  private objString(obj: Record<string, Object>, key: string): string | undefined {
+    const val: Object | undefined = obj[key];
+    if (val === undefined || val === null) return undefined;
+    if (typeof val === 'string') return val.trim();
+    if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+    return undefined;
+  }
+
   /** 将 JSON 对象转为 ToolCall */
-  private objToToolCall(obj: Record<string, string>): ToolCall | null {
-    if (!obj['action']) return null;
-    const tc: ToolCall = { action: obj['action'] ?? '' };
-    if (obj['keywords']) tc.keywords = obj['keywords'];
-    if (obj['city']) tc.city = obj['city'];
-    if (obj['hotel']) tc.hotel = obj['hotel'];
-    if (obj['hotelLat']) tc.hotelLat = obj['hotelLat'];
-    if (obj['hotelLng']) tc.hotelLng = obj['hotelLng'];
-    if (obj['days']) tc.days = obj['days'];
-    if (obj['dayIndex']) tc.dayIndex = obj['dayIndex'];
-    if (obj['poiIndex']) tc.poiIndex = obj['poiIndex'];
-    if (obj['name']) tc.name = obj['name'];
-    if (obj['lat']) tc.lat = obj['lat'];
-    if (obj['lng']) tc.lng = obj['lng'];
-    if (obj['type']) tc.type = obj['type'];
-    if (obj['timeSlot']) tc.timeSlot = obj['timeSlot'];
-    if (obj['note']) tc.note = obj['note'];
-    if (obj['mode']) tc.mode = obj['mode'];
+  private objToToolCall(obj: Record<string, Object>): ToolCall | null {
+    const action: string | undefined = this.objString(obj, 'action');
+    if (!action) return null;
+    const tc: ToolCall = { action };
+    const qr: Object | undefined = obj['quickReplies'];
+    if (Array.isArray(qr)) {
+      tc.quickReplies = (qr as Object[]).map((item: Object) => String(item)).filter((item: string) => item.length > 0).slice(0, 3);
+    }
+    const msg = this.objString(obj, 'msg'); if (msg) tc.msg = msg;
+    const keywords = this.objString(obj, 'keywords'); if (keywords) tc.keywords = keywords;
+    const city = this.objString(obj, 'city'); if (city) tc.city = city;
+    const hotel = this.objString(obj, 'hotel'); if (hotel) tc.hotel = hotel;
+    const hotelLat = this.objString(obj, 'hotelLat'); if (hotelLat) tc.hotelLat = hotelLat;
+    const hotelLng = this.objString(obj, 'hotelLng'); if (hotelLng) tc.hotelLng = hotelLng;
+    const days = this.objString(obj, 'days'); if (days) tc.days = days;
+    const dayIndex = this.objString(obj, 'dayIndex'); if (dayIndex) tc.dayIndex = dayIndex;
+    const poiIndex = this.objString(obj, 'poiIndex'); if (poiIndex) tc.poiIndex = poiIndex;
+    const name = this.objString(obj, 'name'); if (name) tc.name = name;
+    const lat = this.objString(obj, 'lat'); if (lat) tc.lat = lat;
+    const lng = this.objString(obj, 'lng'); if (lng) tc.lng = lng;
+    const type = this.objString(obj, 'type'); if (type) tc.type = type;
+    const timeSlot = this.objString(obj, 'timeSlot'); if (timeSlot) tc.timeSlot = timeSlot;
+    const note = this.objString(obj, 'note'); if (note) tc.note = note;
+    const mode = this.objString(obj, 'mode'); if (mode) tc.mode = mode;
     // 跨城交通
-    if (obj['from']) tc.from = obj['from'];
-    if (obj['to']) tc.to = obj['to'];
-    if (obj['fromStation']) tc.fromStation = obj['fromStation'];
-    if (obj['toStation']) tc.toStation = obj['toStation'];
-    if (obj['departureTime']) tc.departureTime = obj['departureTime'];
-    if (obj['arrivalTime']) tc.arrivalTime = obj['arrivalTime'];
-    if (obj['number']) tc.number = obj['number'];
+    const from = this.objString(obj, 'from'); if (from) tc.from = from;
+    const to = this.objString(obj, 'to'); if (to) tc.to = to;
+    const fromStation = this.objString(obj, 'fromStation'); if (fromStation) tc.fromStation = fromStation;
+    const toStation = this.objString(obj, 'toStation'); if (toStation) tc.toStation = toStation;
+    const departureTime = this.objString(obj, 'departureTime'); if (departureTime) tc.departureTime = departureTime;
+    const arrivalTime = this.objString(obj, 'arrivalTime'); if (arrivalTime) tc.arrivalTime = arrivalTime;
+    const number = this.objString(obj, 'number'); if (number) tc.number = number;
     // 预算
-    if (obj['amount']) tc.amount = obj['amount'];
-    if (obj['budget']) tc.amount = obj['budget'];  // 兼容 budget→amount
-    if (obj['cost']) tc.cost = obj['cost'];
-    if (obj['date']) tc.date = obj['date'];
+    const amount = this.objString(obj, 'amount'); if (amount) tc.amount = amount;
+    const budget = this.objString(obj, 'budget'); if (budget) tc.amount = budget;  // 兼容 budget→amount
+    const cost = this.objString(obj, 'cost'); if (cost) tc.cost = cost;
+    const date = this.objString(obj, 'date'); if (date) tc.date = date;
+    const dayStartHour = this.objString(obj, 'dayStartHour'); if (dayStartHour) tc.dayStartHour = dayStartHour;
+    const dayEndHour = this.objString(obj, 'dayEndHour'); if (dayEndHour) tc.dayEndHour = dayEndHour;
     return tc;
   }
 

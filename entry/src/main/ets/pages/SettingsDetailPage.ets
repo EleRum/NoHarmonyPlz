@@ -7,7 +7,7 @@ import { getTheme } from '../common/Theme';
 import { ClaudeService } from '../services/ClaudeService';
 import { Dao } from '../database/Dao';
 import { UserBasicInfo } from '../model/UserBasicInfo';
-import { MapMarkerSignal } from '../common/TravelPreferenceTags';
+import { MapMarkerSignal, ProfileRefreshSignal, RecRefreshSignal } from '../common/TravelPreferenceTags';
 
 const TAG = 'SettingsDetailPage';
 
@@ -54,6 +54,8 @@ export struct SettingsDetailPage {
   // Toast
   @State toastMsg: string = '';
   @State toastVisible: boolean = false;
+  @State confirmClearData: boolean = false;
+  @State isClearingData: boolean = false;
 
   private claude: ClaudeService = new ClaudeService();
   private dao: Dao = Dao.getInstance();
@@ -72,6 +74,8 @@ export struct SettingsDetailPage {
     } else if (this.section === 'rec') {
       this.title = '推荐设置';
       this.loadRecSetting();
+    } else if (this.section === 'privacy') {
+      this.title = '隐私与数据';
     } else {
       this.title = '关于';
     }
@@ -133,6 +137,35 @@ export struct SettingsDetailPage {
     this.showToast('密钥已清除');
   }
 
+  async clearLocalData(): Promise<void> {
+    if (!this.confirmClearData) {
+      this.confirmClearData = true;
+      this.showToast('再次点击确认清除本地数据');
+      setTimeout(() => { this.confirmClearData = false; }, 4500);
+      return;
+    }
+    this.isClearingData = true;
+    try {
+      await this.claude.setApiKey('');
+      const deleted: number = await this.dao.clearAllLocalData();
+      this.apiKey = '';
+      this.hasKey = false;
+      this.providerName = '';
+      this.recEnabled = true;
+      this.showMapMarkers = true;
+      ProfileRefreshSignal.fire();
+      RecRefreshSignal.fire();
+      MapMarkerSignal.fire();
+      this.showToast(`已清除本地数据（${deleted}项）`);
+    } catch (e) {
+      Logger.error(TAG, 'clearLocalData failed: %{public}s', JSON.stringify(e));
+      this.showToast('清除失败，请稍后重试');
+    } finally {
+      this.confirmClearData = false;
+      this.isClearingData = false;
+    }
+  }
+
   async loadRecSetting(): Promise<void> {
     const p1 = await this.dao.queryUserProfile('recommendation_enabled');
     if (p1 && p1.preferenceValue === 'false') this.recEnabled = false;
@@ -168,6 +201,7 @@ export struct SettingsDetailPage {
           Column() {
             if (this.section === 'ai') { this.BuildAiContent() }
             else if (this.section === 'rec') { this.BuildRecContent() }
+            else if (this.section === 'privacy') { this.BuildPrivacyContent() }
             else { this.BuildAboutContent() }
           }
           .width('100%').padding({ left: 16, right: 16, bottom: 20 })
@@ -255,8 +289,8 @@ export struct SettingsDetailPage {
       Text('Claude: console.anthropic.com → API Keys').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 2 }).width('100%')
       Text('DeepSeek: platform.deepseek.com → API Keys').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 2 }).width('100%')
       Text('华为盘古: console.huaweicloud.com/modelarts → 应用接入 → API Key').fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ bottom: 6 }).width('100%')
-      Text('💡 密钥仅保存在本地数据库，不会上传到任何第三方服务器。')
-        .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).maxLines(3).width('100%')
+      Text('💡 密钥保存在本地数据库；调用你选择的模型服务时，仅作为认证信息发送给该模型服务商。足迹、照片坐标和聊天内容只在必要上下文内传入。')
+        .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).maxLines(4).width('100%')
     }
   }
 
@@ -288,6 +322,39 @@ export struct SettingsDetailPage {
           })
       }.width('100%').padding(16).backgroundColor(getTheme(this.themeMode).surface).borderRadius(10)
     }
+  }
+
+  @Builder
+  BuildPrivacyContent() {
+    Column() {
+      this.PrivacyItem('本地保存', '足迹点、活动片段、用户资料、旅行偏好、推荐结果、AI 设置和聊天/行程历史保存在本机数据库。')
+      this.PrivacyItem('必要联网', '地图检索、路线、天气、交通和大模型对话会向你配置的地图/模型服务发送必要查询内容；不会发送密码、Cookie 或原始系统凭据。')
+      this.PrivacyItem('权限使用', '定位用于记录足迹和附近推荐；照片权限只用于读取带位置的照片元数据，生成照片足迹。')
+      this.PrivacyItem('Agent 约束', 'Agent 只能基于工具结果和当前行程状态给出事实性结论；查不到时会提示失败原因，不会假装成功。')
+
+      Button(this.isClearingData ? '清除中…' : (this.confirmClearData ? '确认清除全部本地数据' : '清除本地数据'))
+        .fontSize(13)
+        .fontColor(this.confirmClearData ? '#FFFFFF' : '#DC2626')
+        .backgroundColor(this.confirmClearData ? '#DC2626' : '#FEF2F2')
+        .borderRadius(8)
+        .height(40)
+        .width('100%')
+        .enabled(!this.isClearingData)
+        .margin({ top: 14 })
+        .onClick(() => { this.clearLocalData(); })
+      Text('清除后会删除本地足迹、活动片段、推荐、校准、个人资料、AI Key、聊天和行程缓存。')
+        .fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).margin({ top: 8 }).width('100%')
+    }
+    .width('100%').padding(16).backgroundColor(getTheme(this.themeMode).surface).borderRadius(12)
+  }
+
+  @Builder
+  PrivacyItem(title: string, desc: string) {
+    Column() {
+      Text(title).fontSize(13).fontWeight(FontWeight.Medium).fontColor(getTheme(this.themeMode).textPrimary).width('100%')
+      Text(desc).fontSize(11).fontColor(getTheme(this.themeMode).textSecondary).lineHeight(17).margin({ top: 4 }).width('100%')
+    }
+    .alignItems(HorizontalAlign.Start).width('100%').margin({ bottom: 12 })
   }
 
   @Builder

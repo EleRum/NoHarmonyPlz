@@ -240,13 +240,15 @@
     if (!map._myLocationMarker) {
       map._myLocationMarker = new AMap.Marker({
         position: pos, map: map, zIndex: 1000,
+        offset: new AMap.Pixel(-12, -12),
         icon: new AMap.Icon({
-          size: new AMap.Size(20, 20),
+          size: new AMap.Size(24, 24),
           image: 'data:image/svg+xml,' + encodeURIComponent(
-            '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">' +
-            '<circle cx="10" cy="10" r="8" fill="#3388ff" stroke="#fff" stroke-width="2"/>' +
-            '<circle cx="10" cy="10" r="3" fill="#fff"/></svg>'),
-          imageSize: new AMap.Size(20, 20)
+            '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">' +
+            '<circle cx="12" cy="12" r="11" fill="#ffffff" fill-opacity="0.96"/>' +
+            '<circle cx="12" cy="12" r="8" fill="#3388ff" stroke="#ffffff" stroke-width="2"/>' +
+            '<circle cx="12" cy="12" r="3" fill="#ffffff"/></svg>'),
+          imageSize: new AMap.Size(24, 24)
         })
       });
     } else { map._myLocationMarker.setPosition(pos); }
@@ -380,31 +382,40 @@
     }
   }
 
-  // 深色模式 CSS 回退（当 setMapStyle 不可用时）
+  function clearFootDarkFilters() {
+    var filtered = document.querySelectorAll('[data-foot-dark-filter="1"]');
+    for (var i = 0; i < filtered.length; i++) {
+      filtered[i].style.filter = '';
+      filtered[i].removeAttribute('data-foot-dark-filter');
+    }
+    var c = document.getElementById('container');
+    if (c) c.style.filter = '';
+  }
+
+  // 深色模式 CSS 回退：只处理底图图层，避免标记、图标、定位点被反色。
   function mapSetDarkMode(enable) {
     var c = document.getElementById('container');
     if (!c) return;
+    clearFootDarkFilters();
     if (enable) {
-      c.style.filter = 'invert(0.9) hue-rotate(180deg)';
-      // 反—反：将所有标记相关元素恢复原色
-      var fixSelectors = [
-        '.amap-marker', '.amap-marker-content',
-        '.amap-marker img', '.amap-icon img',
-        '.amap-info', '.amap-info-content',
-        '.amap-logo', '.amap-copyright'
+      c.style.background = '#0f172a';
+      var layerSelectors = [
+        '.amap-layer canvas',
+        '.amap-layer img',
+        '.amap-vector-layer canvas',
+        '.amap-labels canvas'
       ];
       try {
-        fixSelectors.forEach(function(sel) {
+        layerSelectors.forEach(function(sel) {
           var els = document.querySelectorAll(sel);
           for (var i = 0; i < els.length; i++) {
-            els[i].style.filter = 'invert(1) hue-rotate(180deg)';
+            els[i].style.filter = 'invert(0.86) hue-rotate(180deg) saturate(0.82) brightness(0.92)';
+            els[i].setAttribute('data-foot-dark-filter', '1');
           }
         });
       } catch(e) { /* ignore */ }
     } else {
-      c.style.filter = '';
-      var allEls = document.querySelectorAll('[style*="filter: invert(1)"]');
-      for (var j = 0; j < allEls.length; j++) { allEls[j].style.filter = ''; }
+      c.style.background = '';
     }
     console.log('[FootMap] darkMode CSS filter: ' + enable);
   }
