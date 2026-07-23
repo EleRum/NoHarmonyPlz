@@ -726,31 +726,59 @@ export class TourGuideAgent {
     return { action: 'set_days', days: m[1] };
   }
 
+  /** 相对日期 → YYYY-MM-DD */
+  private dateAfterDays(offset: number): string {
+    const today: Date = new Date();
+    const target: Date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset);
+    return `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
+  }
+
+  /** 从自然语言中提取交通日期，避免“今天出发”落到默认5天后 */
+  private extractTravelDate(input: string): string | undefined {
+    if (/今天|今日|当天/.test(input)) return this.dateAfterDays(0);
+    const relMatch: RegExpMatchArray | null = input.match(/(大后天|后天|明天)/);
+    if (relMatch) {
+      const offset: number = relMatch[1] === '明天' ? 1 : (relMatch[1] === '后天' ? 2 : 3);
+      return this.dateAfterDays(offset);
+    }
+    const dateMatch: RegExpMatchArray | null = input.match(/(\d{1,2}月\d{1,2}[日号]|\d{4}-\d{2}-\d{2})/);
+    return dateMatch ? this.normalizeDate(dateMatch[1]) : undefined;
+  }
+
+  /** 交通工具参数地名规范化：把区域/口语说法转成站点服务能识别的名称 */
+  private normalizeTransportPlaceName(name: string): string {
+    if (!name) return '';
+    let n: string = name.trim()
+      .replace(/[，。,.!?！？]/g, '')
+      .replace(/^(?:从|到|去|在)/, '')
+      .replace(/(?:出发|发车|到达|高铁|火车|动车|飞机|航班|车票|票)$/g, '')
+      .replace(/(?:地区|区域|一带|周边|旅游区|景区)$/, '')
+      .replace(/[市省]$/, '')
+      .trim();
+
+    if (n.includes('潮汕')) return '潮汕';
+    if (n.includes('中山')) return '中山';
+    return n;
+  }
+
   /** 检测跨城交通搜索意图 — 绕过 AI，直接返回工具调用 */
   private detectTransportIntent(input: string): ToolCall | undefined {
-    // 必须包含交通关键词
-    if (!(/高铁|火车|动车|飞机|航班|大巴|客车|怎么去|怎么到|查.*票|查.*车|查.*飞机|车次|班次|几趟|有哪些/.test(input))) return undefined;
+    const hasTransportKeyword: boolean = /高铁|火车|动车|飞机|航班|大巴|客车|怎么去|怎么到|查.*票|查.*车|查.*飞机|车次|班次|几趟|有哪些/.test(input);
+    const hasRoutePattern: boolean = /从.{2,10}(?:出发|启程|走)?[，,。\s]*(?:去|到).{2,12}/.test(input);
+    if (!hasTransportKeyword && !hasRoutePattern) return undefined;
 
-    // 提取日期并标准化（支持"7月20日""后天""明天"等）
-    let date: string | undefined = undefined;
-    // 相对日期：明天/后天/大后天
-    const relMatch = input.match(/(大?后天|明天)/);
-    if (relMatch) {
-      const today: Date = new Date();
-      const offset: number = relMatch[1] === '明天' ? 1 : (relMatch[1] === '后天' ? 2 : 3);
-      const target: Date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset);
-      date = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
-    } else {
-      const dateMatch = input.match(/(\d{1,2}月\d{1,2}[日号]|\d{4}-\d{2}-\d{2})/);
-      if (dateMatch) date = this.normalizeDate(dateMatch[1]);
-    }
+    const date: string | undefined = this.extractTravelDate(input);
 
     let from: string | undefined = undefined;
     let to: string | undefined = undefined;
 
+    // 模式0: "从A出发去B"，不要求出现高铁/火车关键词
+    const routeMatch: RegExpMatchArray | null = input.match(/从\s*([一-龥]{2,8})(?:市)?\s*(?:出发|启程|走)?[，,。\s]*(?:去|到)\s*([一-龥]{2,6})(?:地区|区域|一带|周边)?(?=玩|旅游|旅行|逛|住|停留|今天|今日|明天|后天|大后天|\d|[，,。\s]|$)/);
+    if (routeMatch) { from = routeMatch[1]; to = routeMatch[2]; }
+
     // 模式1: "从A到B" / "从A坐X去B"
     const m1 = input.match(/从([^\s,，。去到坐]{2,8})[到去坐][^\s,，。]{0,6}?([^\s,，。去到]{2,8})/);
-    if (m1) { from = m1[1]; to = m1[2]; }
+    if (!from && m1) { from = m1[1]; to = m1[2]; }
 
     // 模式2: "A到B的高铁/火车/飞机/票"
     if (!from) {
@@ -770,9 +798,9 @@ export class TourGuideAgent {
       if (m4) { to = m4[1]; }
     }
 
-    // 清洗城市名：去"市"字和交通关键词
-    if (from) from = from.replace(/[市省]$/, '');
-    if (to) to = to.replace(/[市省]$/, '');
+    // 清洗城市名：去"市"字、交通关键词和区域后缀
+    if (from) from = this.normalizeTransportPlaceName(from);
+    if (to) to = this.normalizeTransportPlaceName(to);
 
     if (from && to && from.length >= 2 && to.length >= 2 && from !== to) {
       const tc: ToolCall = { action: 'search_transport', from: from, to: to };
@@ -814,7 +842,7 @@ export class TourGuideAgent {
     // ── 3. 隐式交通：有目的地 + "从X出发/来/走" → 自动补交通搜索 ──
     // 修复: 不依赖 geocodeIntent，城市已定位时也用 this.plan.city 作为目的地
     if (!transportIntent) {
-      const destCity: string = geocodeIntent?.city || this.plan.city;
+      const destCity: string = this.normalizeTransportPlaceName(geocodeIntent?.city || this.plan.city);
       if (destCity) {
         const implicitTransport: ToolCall | undefined = this.detectImplicitTransport(input, destCity);
         if (implicitTransport) {
@@ -892,26 +920,14 @@ export class TourGuideAgent {
     // 提取出发城市
     const m = input.match(/从\s*([^\s,，。去到出发来走过]{2,8})\s*(?:出发|来|走|过去|过来|那边)?/);
     if (!m) return undefined;
-    let from: string = m[1].replace(/[市省]$/, '');
-    if (from.length < 2 || from === destCity) return undefined;
+    let from: string = this.normalizeTransportPlaceName(m[1]);
+    const to: string = this.normalizeTransportPlaceName(destCity);
+    if (from.length < 2 || from === to) return undefined;
 
-    // 提取日期
-    let date: string | undefined = undefined;
-    // "明天" → 实际日期
-    const relativeMatch = input.match(/(明天|后天|大后天)/);
-    if (relativeMatch) {
-      const today: Date = new Date();
-      const offset: number = relativeMatch[1] === '明天' ? 1 : (relativeMatch[1] === '后天' ? 2 : 3);
-      const target: Date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset);
-      date = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
-    } else {
-      // "7月20日"等
-      const dm = input.match(/(\d{1,2}月\d{1,2}[日号])/);
-      if (dm) date = dm[1];
-    }
+    const date: string | undefined = this.extractTravelDate(input);
 
-    const tc: ToolCall = { action: 'search_transport', from: from, to: destCity };
-    if (date) tc.date = this.normalizeDate(date);
+    const tc: ToolCall = { action: 'search_transport', from: from, to: to };
+    if (date) tc.date = date;
     return tc;
   }
 
@@ -1404,8 +1420,8 @@ export class TourGuideAgent {
         break;
       }
       case 'search_transport': {
-        const stFrom: string = params['from'] ?? '';
-        const stTo: string = params['to'] ?? '';
+        const stFrom: string = this.normalizeTransportPlaceName(params['from'] ?? '');
+        const stTo: string = this.normalizeTransportPlaceName(params['to'] ?? '');
         const stDate: string = params['date'] ?? '';
         const preferredMode: string = params['mode'] ?? '';
         if (!stFrom || !stTo) {
@@ -2237,10 +2253,15 @@ export class TourGuideAgent {
   /** 标准化日期格式为 YYYY-MM-DD */
   private normalizeDate(date: string): string {
     if (!date) return '';
+    const value: string = date.trim();
+    if (/今天|今日|当天/.test(value)) return this.dateAfterDays(0);
+    if (value.includes('大后天')) return this.dateAfterDays(3);
+    if (value.includes('后天')) return this.dateAfterDays(2);
+    if (value.includes('明天')) return this.dateAfterDays(1);
     // 已经是 YYYY-MM-DD 格式
-    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
     // "7月20日" / "07月20日" → 转为 YYYY-MM-DD
-    const m = date.match(/(\d{1,2})月(\d{1,2})[日号]?/);
+    const m = value.match(/(\d{1,2})月(\d{1,2})[日号]?/);
     if (m) {
       const today: Date = new Date();
       const year: number = today.getFullYear();
@@ -2248,7 +2269,7 @@ export class TourGuideAgent {
       const day: string = String(parseInt(m[2])).padStart(2, '0');
       return `${year}-${month}-${day}`;
     }
-    return date; // 无法解析则原样返回
+    return value; // 无法解析则原样返回
   }
 
   /** 统一的 POI 费用估算 — 唯一真相来源，search_and_add 和后台重算共用 */

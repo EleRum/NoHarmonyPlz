@@ -150,15 +150,22 @@ const BUILTIN_STATIONS: Record<string, string[]> = {
   '佛山': ['FSQ', 'FOQ'],
   '东莞': ['DRQ', 'DAQ'],
   '惠州': ['HCQ', 'HUQ'],
-  '汕头': ['OTQ', 'SWQ'],
+  '中山': ['ZSQ', 'ZGQ'],
+  '中山北': ['ZGQ', 'ZSQ'],
+  '汕头': ['OTQ'],
+  '汕尾': ['OGQ', 'KMQ'],
   '湛江': ['ZWQ', 'ZJZ'],
   '肇庆': ['ZVQ', 'ZFQ'],
   '江门': ['JVQ', 'JWQ'],
   '茂名': ['MDQ', 'MMQ'],
   '韶关': ['SNQ', 'SGQ'],
   '梅州': ['MOQ', 'MZQ'],
-  '潮州': ['CKQ', 'CZQ'],
-  '揭阳': ['JYQ', 'JRQ'],
+  '潮州': ['CKQ'],
+  '潮阳': ['CNQ'],
+  '揭阳': ['JRQ', 'PEQ', 'KTQ'],
+  '潮汕': ['CBQ', 'CKQ', 'CNQ', 'JRQ', 'PEQ', 'OTQ'],
+  '潮汕站': ['CBQ'],
+  '潮汕地区': ['CBQ', 'CKQ', 'CNQ', 'JRQ', 'PEQ', 'OTQ'],
   '清远': ['QBQ', 'QYQ'],
   '南宁': ['NNZ', 'NRZ'],
   '桂林': ['GLZ', 'GIZ', 'GEZ'],
@@ -365,8 +372,12 @@ const CODE_TO_STATION: Record<string, string> = {
   'DRQ': '东莞', 'DAQ': '东莞东', 'RRQ': '东莞南',
   // 惠州
   'HCQ': '惠州', 'HUQ': '惠州南',
-  // 汕头
-  'OTQ': '汕头', 'SWQ': '汕尾',
+  // 中山
+  'ZSQ': '中山', 'ZGQ': '中山北',
+  // 潮汕
+  'CBQ': '潮汕', 'CKQ': '潮州', 'CNQ': '潮阳', 'JRQ': '揭阳南', 'PEQ': '普宁', 'KTQ': '葵潭',
+  // 汕头/汕尾
+  'OTQ': '汕头', 'OGQ': '汕尾', 'KMQ': '鲘门',
   // 湛江
   'ZWQ': '湛江', 'ZJZ': '湛江西',
   // 柳州
